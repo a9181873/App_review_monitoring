@@ -172,6 +172,11 @@ def get_android_reviews(
         if review_date < MIN_REVIEW_DATE:
             continue
 
+        # 過濾已回覆的評論（只通知未回覆的）
+        is_replied = r.get("replyContent") is not None
+        if config.IGNORE_REPLIED_ANDROID_REVIEWS and is_replied:
+            continue
+
         new_reviews.append(
             {
                 "platform": "Android",
@@ -180,7 +185,7 @@ def get_android_reviews(
                 "rating": r["score"],
                 "review_text": r["content"],
                 "date": review_date.strftime("%Y-%m-%d %H:%M:%S"),
-                "is_replied": r.get("replyContent") is not None,
+                "is_replied": is_replied,
                 "review_id": review_id,
             }
         )

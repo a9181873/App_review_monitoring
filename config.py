@@ -21,7 +21,7 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 APPS = [
     {
         "name": "台灣人壽",
-        "ios_id": "1473215082",
+        "ios_id": "1035225274",
         "android_id": "com.taiwanlife.app",
     },
     {
@@ -41,6 +41,9 @@ ANDROID_COUNTRY = "tw"
 # iOS 抓取設定
 IOS_REVIEW_COUNT = 50
 IOS_COUNTRY = "tw"
+
+# 是否過濾掉已回覆的 Android 評論（True = 只通知未回覆的）
+IGNORE_REPLIED_ANDROID_REVIEWS = True
 
 # ──────────────────────────────────────────────
 # Email 通知設定
