@@ -1,9 +1,9 @@
 {
   "success": true,
-  "review_count": 436,
-  "report_path": "C:\\Users\\JY\\Desktop\\App 評論監測工具\\reports\\report_2026-03-17.md",
+  "review_count": 0,
+  "report_path": "C:\\Users\\JY\\Desktop\\App 評論監測工具\\reports\\report_2026-03-18.md",
   "excel_path": "C:\\Users\\JY\\Desktop\\App 評論監測工具\\reports\\App評論監測_資料庫.xlsx",
-  "subject": "【App 評論日報】2026-03-17 — iOS 50 則 / Android 386 則新評論",
+  "subject": "【App 評論日報】2026-03-18 ✅ 今日無新增待處理評論",
   "notify_results": {
     "EmailChannel": true,
     "TeamsChannel": true

@@ -70,7 +70,7 @@ python main.py
 1. 於 GCP 開啟一台 `e2-micro` (us-central1)。
 2. 透過 gcloud 或 SSH 將本專案上傳。
 3. 執行 `crontab -e` 設定每日定時排程：
-   `0 9 * * * cd ~/app-monitor && /usr/bin/python3 main.py >> cron.log 2>&1`
+   `0 11 * * * cd ~/app-monitor && /usr/bin/python3 main.py >> cron.log 2>&1`
 
 ---
 

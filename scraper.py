@@ -11,6 +11,9 @@ from google_play_scraper import Sort, reviews
 
 import config
 
+# 只回報此日期之後的評論（避免歷史評論灌爆通知）
+MIN_REVIEW_DATE = datetime(2026, 1, 1)
+
 
 # ──────────────────────────────────────────────
 # 已見 ID 管理
@@ -41,30 +44,38 @@ def get_ios_reviews(app_name: str, app_id: str, country: str = None) -> list[dic
     import requests
 
     # 使用 iTunes RSS Feed API (JSON 格式)
-    # 最多可以抓到前 10 頁 (page=1~10)，每頁 50 筆
-    url = f"https://itunes.apple.com/{country}/rss/customerreviews/page=1/id={app_id}/sortby=mostrecent/json"
-    
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        print(f"[iOS] 抓取 {app_name} 失敗：{e}")
-        return []
+    # 抓取前 10 頁 (page=1~10)，每頁最多 50 筆
+    reviews_data = []
+    for page in range(1, 11):
+        url = f"https://itunes.apple.com/{country}/rss/customerreviews/page={page}/id={app_id}/sortby=mostrecent/json"
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            print(f"[iOS] 抓取 {app_name} 第 {page} 頁失敗：{e}")
+            break
 
-    feed = data.get("feed", {})
-    entries = feed.get("entry", [])
+        feed = data.get("feed", {})
+        entries = feed.get("entry", [])
 
-    if not entries:
+        if not entries:
+            break  # 沒有更多資料了
+
+        # 如果只有一筆，有時會不是 list
+        if isinstance(entries, dict):
+            entries = [entries]
+
+        # 過濾出真正的評論 (通常第一筆 entry 是 App 資訊本身，沒有 author)
+        page_reviews = [entry for entry in entries if "author" in entry]
+        if not page_reviews:
+            break  # 該頁無評論資料
+        reviews_data.extend(page_reviews)
+        print(f"[iOS] {app_name} 第 {page} 頁：{len(page_reviews)} 則評論")
+
+    if not reviews_data:
         print(f"[iOS] {app_name} 無評論資料")
         return []
-
-    # 如果只有一筆，有時會不是 list
-    if isinstance(entries, dict):
-        entries = [entries]
-
-    # 過濾出真正的評論 (通常第一筆 entry 是 App 資訊本身，沒有 author)
-    reviews_data = [entry for entry in entries if "author" in entry]
 
     # 載入已見 ID
     seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_ios_seen_ids.json")
@@ -86,7 +97,12 @@ def get_ios_reviews(app_name: str, app_id: str, country: str = None) -> list[dic
                 date_obj = datetime.fromisoformat(date_str).replace(tzinfo=None)
                 formatted_date = date_obj.strftime("%Y-%m-%d %H:%M:%S")
             except (ValueError, TypeError):
+                date_obj = None
                 formatted_date = date_str
+
+            # 只回報 2026 年以後的評論
+            if date_obj and date_obj < MIN_REVIEW_DATE:
+                continue
 
             new_reviews.append(
                 {
@@ -152,6 +168,11 @@ def get_android_reviews(
             continue
 
         review_date = r["at"]
+
+        # 只回報 2026 年以後的評論
+        if review_date < MIN_REVIEW_DATE:
+            continue
+
         new_reviews.append(
             {
                 "platform": "Android",
