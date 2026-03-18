@@ -1,0 +1,18 @@
+# 敏感設定（絕對不推上 git）
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 資料與報告（本機生成，不需版控）
+data/
+reports/
+
+# OS
+.DS_Store
+Thumbs.db

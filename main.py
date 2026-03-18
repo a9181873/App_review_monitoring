@@ -12,6 +12,9 @@ import os
 import sys
 from datetime import datetime
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import config
 from append_to_excel import append_to_excel
 from classify_reviews import classify_reviews

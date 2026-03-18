@@ -49,10 +49,10 @@ EMAIL_ENABLED = True
 EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "smtp.gmail.com")
 EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "587"))
 EMAIL_SENDER = os.getenv("EMAIL_SENDER", "s49281008@gmail.com")
-EMAIL_PASSWORD = "myzr llsd jokp njwk"  # Gmail App 密碼
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_RECIPIENTS = [
     addr.strip()
-    for addr in os.getenv("EMAIL_RECIPIENTS", "s49281008@gmail.com").split(",")
+    for addr in os.getenv("EMAIL_RECIPIENTS", "daokuan.yuan@taiwanlife.com").split(",")
     if addr.strip()
 ]
 
@@ -60,4 +60,4 @@ EMAIL_RECIPIENTS = [
 # Microsoft Teams 通知設定
 # ──────────────────────────────────────────────
 TEAMS_ENABLED = True
-TEAMS_WEBHOOK_URL = "https://ctbctaiwanlife.webhook.office.com/webhookb2/00387e18-445d-436f-926f-30cbe038d8d8@ff3a4655-94b8-494e-9455-8d21f9db1c51/IncomingWebhook/05e4c95de2a84291b6e4bd96187d51d0/f86f5e27-f3d2-43c7-99fe-500e158abd12/V2zr2y7RKvtm-EorN092a0csv5wsmx_CUccYpm09Xgh281"
+TEAMS_WEBHOOK_URL = os.getenv("TEAMS_WEBHOOK_URL", "")
