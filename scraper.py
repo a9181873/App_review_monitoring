@@ -6,7 +6,6 @@ import json
 import os
 from datetime import datetime
 
-from app_store_scraper import AppStore
 from google_play_scraper import Sort, reviews
 
 import config
