@@ -5,15 +5,24 @@ App 評論監測工具 — 集中設定檔
 import os
 
 # ──────────────────────────────────────────────
-# 路徑設定（預設為專案目錄下的子資料夾）
+# 路徑設定
+# GCP Cloud Functions: source 目錄唯讀，改用 /tmp
+# 本機: 使用專案目錄下的子資料夾
 # ──────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+_IS_GCP = os.getenv("FUNCTION_TARGET") is not None  # Cloud Functions 會自動設定此變數
 
-# 確保目錄存在
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(REPORTS_DIR, exist_ok=True)
+if _IS_GCP:
+    DATA_DIR = "/tmp/data"
+    REPORTS_DIR = "/tmp/reports"
+else:
+    DATA_DIR = os.path.join(BASE_DIR, "data")
+    REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+
+# 確保目錄存在（延遲建立，避免 GCP build 驗證時失敗）
+def ensure_dirs():
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(REPORTS_DIR, exist_ok=True)
 
 # ──────────────────────────────────────────────
 # 監控的 App 清單
@@ -44,6 +53,27 @@ IOS_COUNTRY = "tw"
 
 # 是否過濾掉已回覆的 Android 評論（True = 只通知未回覆的）
 IGNORE_REPLIED_ANDROID_REVIEWS = True
+
+# 是否過濾掉已回覆的 iOS 評論（True = 只通知未回覆的）
+IGNORE_REPLIED_IOS_REVIEWS = True
+
+# ──────────────────────────────────────────────
+# AI 語意分析設定 (Google Gemini Free Tier)
+# ──────────────────────────────────────────────
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+AI_BATCH_SIZE = 10  # 每批送幾則評論給 Gemini
+
+# ──────────────────────────────────────────────
+# 通知重試設定
+# ──────────────────────────────────────────────
+NOTIFY_MAX_RETRIES = 3        # 最多重試次數
+NOTIFY_RETRY_BASE_DELAY = 2   # 初始重試延遲（秒），指數退避：2s → 4s → 8s
+
+# ──────────────────────────────────────────────
+# 回溯模式設定
+# ──────────────────────────────────────────────
+BACKFILL_ANDROID_COUNT = 3000  # 回溯模式抓取的 Android 評論數
+BACKFILL_IOS_PAGES = 10        # 回溯模式 iOS RSS 頁數（每頁 50 則）
 
 # ──────────────────────────────────────────────
 # Email 通知設定

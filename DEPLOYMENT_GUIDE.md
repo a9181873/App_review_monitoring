@@ -1,82 +1,149 @@
-# App 評論監測工具部署手冊 (Python + Power Automate)
+# App 評論監測工具：GCP 雲端部署手冊
 
-本手冊旨在指導您如何部署 App 評論監測工具，並結合 **Microsoft Power Automate** 實現自動化排程與通知。
-
----
-
-## 1. 環境準備
-
-### 1.1 Python 環境安裝
-請確保您的電腦已安裝 Python 3.10 或以上版本。
-1. 前往 [Python 官網](https://www.python.org/) 下載並安裝。
-2. 開啟終端機 (Terminal) 或命令提示字元 (CMD)，執行以下指令安裝必要套件：
-   ```bash
-   pip install google-play-scraper app-store-scraper pandas openpyxl openai
-   ```
-
-### 1.2 設定環境變數
-本工具使用 Gemini AI (透過 OpenAI 相容介面) 進行分類。
-- **Windows**: 
-  1. 搜尋「編輯系統環境變數」。
-  2. 點擊「環境變數」，在「系統變數」中新增 `OPENAI_API_KEY`，值為您的 API Key。
-- **Mac/Linux**:
-  在 `~/.bashrc` 或 `~/.zshrc` 中加入：
-  ```bash
-  export OPENAI_API_KEY='您的_API_KEY'
-  ```
+本手冊指導您如何將 App 評論監測工具部署至 **Google Cloud Platform (GCP)**，使用 **Cloud Functions (Gen2)** + **Cloud Scheduler** 實現每日自動執行。
 
 ---
 
-## 2. 程式碼結構說明
+## 架構圖
 
-您的工具目錄 `/home/ubuntu/app_review_tool/` 包含以下核心檔案：
+```mermaid
+graph LR
+    subgraph GCP["Google Cloud Platform"]
+        Scheduler["Cloud Scheduler<br/>每日 11:00 觸發"]
+        CF["Cloud Functions Gen2<br/>app-review-monitor<br/>Python 3.12 / 512MB / 540s"]
+        EnvVars["環境變數<br/>GEMINI_API_KEY<br/>EMAIL_PASSWORD<br/>TEAMS_WEBHOOK_URL"]
+    end
 
-| 檔案名稱 | 功能描述 |
-| :--- | :--- |
-| `main.py` | **主程式**：整合所有流程，是自動化執行的入口。 |
-| `scraper.py` | **抓取模組**：負責從 iOS App Store 與 Google Play 抓取評論。 |
-| `classify_reviews.py` | **AI 模組**：呼叫 Gemini AI 對評論進行分類、情緒分析與優先度標記。 |
-| `append_to_excel.py` | **資料庫模組**：將新評論寫入 Excel 檔案，並自動去重。 |
-| `summarizer.py` | **報告模組**：產出每日 Markdown 摘要報告。 |
-| `notifier.py` | **通知模組**：發送 Email 通知。 |
+    subgraph External["外部服務"]
+        AppStore["App Store<br/>RSS + 網頁爬蟲"]
+        PlayStore["Google Play Store"]
+        GeminiAPI["Gemini 2.5 Flash API"]
+        SMTP["Gmail SMTP"]
+        TeamsWH["Teams Webhook"]
+    end
 
----
-
-## 3. 結合 Power Automate 自動化
-
-若要實現「每日自動執行」，建議使用 **Power Automate Desktop (PAD)**。
-
-### 步驟 1：建立新的流程
-1. 開啟 Power Automate Desktop，點擊「新增流程」，命名為「App 評論每日監測」。
-
-### 步驟 2：設定排程 (或手動觸發)
-在流程中加入以下動作：
-1. **執行 Python 指令碼** (或 **執行 DOS 指令**)：
-   - 指令：
-     ```bash
-     cd C:\您的路徑\app_review_tool && python main.py
-     ```
-   - *注意：請將路徑替換為您實際存放程式碼的位置。*
-
-### 步驟 3：讀取報告並發送通知 (選用)
-如果您希望由 Power Automate 發送 Outlook 郵件而非程式碼發送：
-1. 使用「讀取文字檔案」動作，讀取 `reports/report_YYYY-MM-DD.md`。
-2. 使用「發送電子郵件訊息 (V2)」動作，將讀取的內容作為郵件本文。
-
-### 步驟 4：設定排程執行
-1. 在 Power Automate 控制面板中，為此流程設定「週期性」觸發器（例如：每天早上 11:00）。
+    Scheduler -->|HTTP POST| CF
+    EnvVars -.-> CF
+    CF -->|抓取 iOS 評論| AppStore
+    CF -->|抓取 Android 評論| PlayStore
+    CF -->|AI 語意分析| GeminiAPI
+    CF -->|Email 通知| SMTP
+    CF -->|Teams 通知| TeamsWH
+```
 
 ---
 
-## 4. 常見問題 (FAQ)
+## 1. 前置準備
 
-**Q: 為什麼 iOS 抓不到評論？**
-A: Apple RSS Feed 有時會因為地區限制或頻率限制導致回傳空值。程式已加入重試機制，若持續失敗，請檢查網路環境是否能正常存取 App Store 網頁。
+### 1.1 安裝 Google Cloud SDK
+前往 [gcloud CLI 安裝頁面](https://cloud.google.com/sdk/docs/install) 下載並安裝。
 
-**Q: 如何修改監測的 App？**
-A: 請修改 `scraper.py` 中的 `apps` 列表，更換對應的 `ios_id` 與 `android_id`。
+### 1.2 登入並設定專案
+```bash
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+```
+
+### 1.3 啟用必要 API
+```bash
+gcloud services enable \
+  cloudfunctions.googleapis.com \
+  cloudscheduler.googleapis.com \
+  cloudbuild.googleapis.com \
+  run.googleapis.com
+```
 
 ---
 
-## 5. 檔案下載與備份
-建議定期備份 `reports/App評論監測_資料庫.xlsx`，這是您長期的評論資產。
+## 2. 部署 Cloud Function
+
+### 方法 A：使用部署腳本（推薦）
+修改 `deploy_gcp.sh` 中的環境變數後執行：
+```bash
+bash deploy_gcp.sh
+```
+
+### 方法 B：手動部署
+```bash
+gcloud functions deploy app-review-monitor \
+  --gen2 \
+  --region=asia-east1 \
+  --runtime=python312 \
+  --memory=512MB \
+  --timeout=540s \
+  --entry-point=cloud_function_handler \
+  --trigger-http \
+  --allow-unauthenticated \
+  --set-env-vars="EMAIL_SMTP_SERVER=smtp.gmail.com,EMAIL_SMTP_PORT=587,EMAIL_SENDER=your@gmail.com,EMAIL_PASSWORD=your-app-password,EMAIL_RECIPIENTS=pm@company.com,TEAMS_WEBHOOK_URL=https://...webhook.office.com/...,GEMINI_API_KEY=your-gemini-key" \
+  --source=.
+```
+
+部署成功後會回傳一個 HTTP URL，例如：
+```
+https://asia-east1-YOUR_PROJECT.cloudfunctions.net/app-review-monitor
+```
+
+---
+
+## 3. 設定 Cloud Scheduler
+
+建立每日定時觸發排程：
+```bash
+gcloud scheduler jobs create http app-review-daily \
+  --location=asia-east1 \
+  --schedule="0 11 * * *" \
+  --time-zone="Asia/Taipei" \
+  --uri="https://asia-east1-YOUR_PROJECT.cloudfunctions.net/app-review-monitor" \
+  --http-method=POST
+```
+
+> 此設定為每天早上 11:00 (台灣時間) 自動執行一次。
+
+### 手動測試觸發
+```bash
+gcloud scheduler jobs run app-review-daily --location=asia-east1
+```
+
+---
+
+## 4. 費用估算
+
+在 GCP 免費額度內，本工具可完全免費運行：
+
+| 服務 | 免費額度 | 本工具用量 |
+|:---|:---|:---|
+| Cloud Functions | 200 萬次調用/月 | ~30 次/月 |
+| Cloud Scheduler | 3 個 job 免費 | 1 個 job |
+| Cloud Build | 120 分鐘/天 | ~2 分鐘/次部署 |
+| 出站流量 | 1 GB/月 | 極少 |
+
+---
+
+## 5. 注意事項
+
+- **GCP 環境下**，`config.py` 會自動偵測 `FUNCTION_TARGET` 環境變數，將資料目錄切換至 `/tmp`（Cloud Functions 唯一可寫入的目錄）
+- Cloud Functions 的 `/tmp` 是暫存空間，每次冷啟動會清空。因此 `seen_ids.json` 不會持久保存，每次執行可能會重複偵測部分評論（但通知內容仍然正確）
+- 如需持久化 `seen_ids`，可考慮使用 Cloud Storage 或 Firestore
+- Gemini API Key 建議從 [Google AI Studio](https://aistudio.google.com/apikey) 取得（有免費額度）
+
+---
+
+## 6. 常見問題
+
+**Q: 部署時出現 Build failed with missing permission？**
+A: 執行以下指令授予 Build Service Account 權限：
+```bash
+PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT --format="value(projectNumber)")
+gcloud projects add-iam-policy-binding YOUR_PROJECT \
+  --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+  --role="roles/cloudbuild.builds.builder"
+gcloud projects add-iam-policy-binding YOUR_PROJECT \
+  --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+```
+
+**Q: 如何查看執行日誌？**
+A:
+```bash
+gcloud functions logs read app-review-monitor --region=asia-east1 --limit=50
+```

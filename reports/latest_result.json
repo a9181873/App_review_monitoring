@@ -1,9 +1,10 @@
 {
   "success": true,
-  "review_count": 0,
-  "report_path": "C:\\Users\\JY\\Desktop\\App 評論監測工具\\reports\\report_2026-03-18.md",
+  "mode": "incremental",
+  "review_count": 1,
+  "report_path": "C:\\Users\\JY\\Desktop\\App 評論監測工具\\reports\\report_2026-03-19.md",
   "excel_path": "C:\\Users\\JY\\Desktop\\App 評論監測工具\\reports\\App評論監測_資料庫.xlsx",
-  "subject": "【App 評論日報】2026-03-18 ✅ 今日無新增待處理評論",
+  "subject": "【App 評論日報】2026-03-19 — iOS 1 則 / Android 0 則新評論",
   "notify_results": {
     "EmailChannel": true,
     "TeamsChannel": true

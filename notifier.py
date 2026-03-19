@@ -2,14 +2,41 @@
 App 評論監測工具 — 多通道通知模組
 支援 Email (SMTP) 與 Microsoft Teams (Incoming Webhook)。
 透過 NotificationManager 統一管理所有已啟用的通知管道。
+含指數退避重試機制。
 """
 import json
 import smtplib
+import time
 from abc import ABC, abstractmethod
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import config
+
+
+# ──────────────────────────────────────────────
+# 重試裝飾器
+# ──────────────────────────────────────────────
+def _retry_on_failure(func):
+    """指數退避重試裝飾器，使用 config 中的重試設定。"""
+
+    def wrapper(*args, **kwargs):
+        max_retries = config.NOTIFY_MAX_RETRIES
+        base_delay = config.NOTIFY_RETRY_BASE_DELAY
+
+        for attempt in range(1, max_retries + 1):
+            result = func(*args, **kwargs)
+            if result:
+                return True
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                print(f"  ↳ 第 {attempt} 次失敗，{delay} 秒後重試...")
+                time.sleep(delay)
+
+        print(f"  ↳ 已重試 {max_retries} 次，全部失敗")
+        return False
+
+    return wrapper
 
 
 # ──────────────────────────────────────────────
@@ -19,12 +46,13 @@ class NotificationChannel(ABC):
     """所有通知管道的基底類別。"""
 
     @abstractmethod
-    def send(self, subject: str, body: str) -> bool:
-        """
-        發送通知。
-        :return: True 表示發送成功，False 表示失敗。
-        """
+    def _send_once(self, subject: str, body: str) -> bool:
+        """單次發送嘗試。"""
         ...
+
+    def send(self, subject: str, body: str) -> bool:
+        """帶重試的發送。"""
+        return _retry_on_failure(self._send_once)(subject, body)
 
 
 # ──────────────────────────────────────────────
@@ -47,7 +75,7 @@ class EmailChannel(NotificationChannel):
         self.password = password
         self.recipients = recipients
 
-    def send(self, subject: str, body: str) -> bool:
+    def _send_once(self, subject: str, body: str) -> bool:
         if not self.sender or not self.password:
             print("[Email] 尚未設定寄件人或密碼，跳過 Email 通知。")
             return False
@@ -57,9 +85,7 @@ class EmailChannel(NotificationChannel):
         msg["To"] = ", ".join(self.recipients)
         msg["Subject"] = subject
 
-        # 純文字版本
         msg.attach(MIMEText(body, "plain", "utf-8"))
-        # HTML 版本（將 Markdown 換行轉為 <br>）
         html_body = body.replace("\n", "<br>")
         msg.attach(MIMEText(f"<html><body>{html_body}</body></html>", "html", "utf-8"))
 
@@ -84,7 +110,7 @@ class TeamsChannel(NotificationChannel):
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
 
-    def send(self, subject: str, body: str) -> bool:
+    def _send_once(self, subject: str, body: str) -> bool:
         if not self.webhook_url:
             print("[Teams] 尚未設定 Webhook URL，跳過 Teams 通知。")
             return False
@@ -95,7 +121,6 @@ class TeamsChannel(NotificationChannel):
             print("[Teams] 缺少 requests 套件，請執行 pip install requests")
             return False
 
-        # 使用 Adaptive Card 格式（Teams Webhook 標準格式）
         card_payload = {
             "type": "message",
             "attachments": [
@@ -201,5 +226,3 @@ if __name__ == "__main__":
     print("=== 通知管道測試 ===")
     manager = NotificationManager()
     print(f"已註冊管道: {[type(c).__name__ for c in manager.channels]}")
-    # 實際發送測試（需設定環境變數）
-    # manager.send_all("測試主旨", "這是一封測試通知。")

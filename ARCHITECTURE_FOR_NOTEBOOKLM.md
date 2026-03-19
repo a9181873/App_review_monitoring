@@ -3,9 +3,11 @@
 本文件專為 NotebookLM 或其他 AI 閱讀工具準備，旨在幫助快速理解「App 評論監測工具」的系統架構、元件職責與資料流。
 
 ## 1. 專案概述
-本專案為一個自動化 Python 應用程式，用於定期監控並抓取指定 App（如：台灣人壽、TeamWalk）在 iOS App Store 與 Google Play 的使用者評論。程式會自動過濾重複評論、進行關鍵字分類、將數據儲存至 Excel 資料庫、產生 Markdown 摘要報告，最後透過 Email 與 Microsoft Teams 發送通知給相關團隊。
+本專案為一個自動化 Python 應用程式，用於定期監控並抓取指定 App（台灣人壽、TeamWalk）在 iOS App Store 與 Google Play 的使用者評論。程式會自動過濾重複評論、透過 **Google Gemini AI** 進行語意分析與分類、將數據儲存至 Excel 資料庫、產生 Markdown 摘要報告，最後透過 Email 與 Microsoft Teams 發送通知給相關團隊。
 
-設計上考量了與 **Power Automate Desktop (PAD)** 的無縫整合，透過統一的執行結束碼（Exit Code）以及標準化的 JSON 輸出，讓 RPA 系統能準確判斷執行狀態並取得附件路徑。
+設計上考量了兩種部署方式：
+- **Windows 本機** + Power Automate Desktop (PAD)：透過統一的 Exit Code 與 JSON 輸出整合 RPA
+- **GCP Cloud Functions** + Cloud Scheduler：雲端免費定時執行
 
 ## 2. 系統架構圖 (Component Architecture)
 
@@ -13,39 +15,47 @@
 
 ```mermaid
 graph TD
-    PAD[Power Automate Desktop / 系統排程] -->|觸發執行| Main(main.py : 主程式的 Orchestrator)
+    Trigger[Cloud Scheduler / PAD / 手動執行] -->|觸發| Main(main.py : Orchestrator)
 
-    subgraph 核心模組 
+    subgraph 核心模組
         Config(config.py : 集中設定) -.環境變數與參數.-> Main
         Scraper(scraper.py : 評論抓取)
-        Classifier(classify_reviews.py : 自動分類)
+        AIAnalyzer(ai_analyzer.py : Gemini AI 語意分析)
+        Classifier(classify_reviews.py : 分類整合)
         Database(append_to_excel.py : Excel 寫入)
         Summarizer(summarizer.py : 摘要報告產生)
-        Notifier(notifier.py : 訊息通知)
+        Notifier(notifier.py : 多通道通知 + 重試)
     end
-    
-    subgraph 外部依賴與資料源
-        iOS[iOS App Store]
-        Android[Google Play Store]
+
+    subgraph 外部服務
+        iOS[iOS App Store<br/>RSS Feed + 網頁爬蟲]
+        Android[Google Play Store<br/>google-play-scraper]
+        Gemini[Google Gemini 2.5 Flash<br/>免費 API]
+        Email((Email SMTP))
+        Teams((MS Teams Webhook))
     end
 
     Main -->|1. 抓取新評論| Scraper
-    Scraper -->|取得資料| iOS
-    Scraper -->|取得資料| Android
+    Scraper -->|RSS + 網頁爬蟲| iOS
+    Scraper -->|API 抓取| Android
     Scraper -.紀錄已見 ID.-> LocalData[(data/ 資料夾)]
-    
-    Main -->|2. 關鍵字過濾| Classifier
+
+    Main -->|2. AI 分析 + 分類| Classifier
+    Classifier -->|批次送 API| AIAnalyzer
+    AIAnalyzer -->|語意分析| Gemini
+    AIAnalyzer -.API 不可用時.-> Fallback[關鍵字 Fallback]
+
     Main -->|3. 更新資料庫| Database
     Database -.寫入或追加.-> ExcelRepo[(reports/Excel資料庫)]
-    
+
     Main -->|4. 產生報告| Summarizer
     Summarizer -.產出 MD 檔.-> ReportRepo[(reports/摘要報告)]
-    
+
     Main -->|5. 發送通知| Notifier
-    Notifier -->|發送| Email((Email SMTP))
-    Notifier -->|發送| Teams((MS Teams Webhook))
-    
-    Main -.回傳 Exit Code 與 JSON 狀態.-> PAD
+    Notifier -->|SMTP + 重試| Email
+    Notifier -->|Adaptive Card + 重試| Teams
+
+    Main -.回傳 Exit Code 與 JSON.-> Trigger
 ```
 
 ## 3. 核心執行流程 (Data Flow)
@@ -53,41 +63,69 @@ graph TD
 程式主要於 `main.py` 依序執行以下五大步驟：
 
 1. **抓取評論 (Scraper)**：
-   - 根據 `config.py` 設定的 App 清單與指定雙平台 ID。
-   - `scraper.py` 呼叫 `google_play_scraper` 與 `app_store_scraper`。
-   - 透過比對位於 `data/` 目錄下的 `[app]_ios_seen_ids.json` 和 `[app]_android_seen_ids.json` 進行去重，只返回全新的評論。
-2. **分類評論 (Classifier)**：
-   - 將新抓取的評論根據特定業務規則、關鍵字（實作於 `classify_reviews.py`）進行分類或上標籤。
+   - 根據 `config.py` 設定的 App 清單與雙平台 ID
+   - **iOS**：使用 iTunes RSS Feed 抓取評論，並透過 App Store 網頁爬蟲（BeautifulSoup）偵測開發者回覆狀態。若爬蟲被阻擋，回覆狀態標記為「未知」（不過濾）
+   - **Android**：使用 `google-play-scraper` 套件，API 直接回傳 `replyContent` 欄位判斷回覆狀態
+   - 透過比對 `data/` 目錄下的 `*_seen_ids.json` 進行去重，只返回全新的評論
+   - 可設定 `IGNORE_REPLIED_IOS_REVIEWS` / `IGNORE_REPLIED_ANDROID_REVIEWS` 過濾已回覆評論
+
+2. **AI 語意分析 + 分類 (AI Analyzer + Classifier)**：
+   - 優先使用 Google Gemini 2.5 Flash（免費方案，每日 1500 次請求）
+   - 每批 10 則評論送 Gemini 分析，回傳：分類（程式錯誤/功能建議/UX體驗/帳號問題/效能問題/正面評價/客服問題/其他）、情緒（正面/負面/中性）、優先度（高/中/低）、一句話摘要
+   - API 不可用或配額耗盡時，自動 fallback 至內建關鍵字分類引擎
+   - Gemini free tier rate limit：每批次間隔 4 秒
+
 3. **資料庫更新 (Database)**：
-   - 將結構化的評論資料透過 `append_to_excel.py` 寫入至 `reports/App評論監測_資料庫.xlsx`，保留歷史數據供後續分析。
+   - 透過 `append_to_excel.py` 寫入 `reports/App評論監測_資料庫.xlsx`，包含 AI 分析結果欄位
+   - 自動去重，保留歷史數據供後續分析
+
 4. **產出摘要 (Summarizer)**：
-   - 透過 `summarizer.py` 將當次抓取與分類結果，總結為一份易於閱讀的 Markdown 報表，儲存於 `reports/report_[今日日期].md`。
+   - 將當次抓取與分類結果，總結為 Markdown 報表
+   - 儲存於 `reports/report_YYYY-MM-DD.md`
+
 5. **通知發送 (Notifier)**：
-   - `notifier.py` 處理兩種渠道推播：如果 `TEAMS_ENABLED` 開啟，則發送至 Teams Webhook；若 `EMAIL_ENABLED` 開啟，透過 SMTP 寄發通知信（並夾帶/引用生成的摘要）。
+   - 支援 Email (SMTP) 與 Teams (Adaptive Card) 雙通道
+   - 內建指數退避重試機制（預設 3 次：2s → 4s → 8s）
+   - 回溯模式不發通知，避免歷史評論灌爆
 
 ## 4. 目錄與檔案說明
 
 | 檔案/目錄名稱 | 說明 |
 | --- | --- |
-| `main.py` | 專案入口點。控制全域流程（1.抓取 -> 2.分類 -> 3.寫入 Excel -> 4.產生報告 -> 5.通知），並回傳標準化 JSON 以供 PAD 解析。 |
-| `config.py` | 集中參數設定檔。透過讀取環境變數載入各類機密配置（如 SMTP 密碼、Teams URL），並定義了 App ID 列表及各平台抓取限制（如 200/50 篇）。 |
-| `scraper.py` | 爬蟲模組，負責與 App Store 和 Google Play 溝通。內含機制可將已讀取的評論 ID 存入 JSON 防止重複通知。 |
-| `classify_reviews.py` | 針對評論內容執行正/負評分析或關鍵字分類。 |
-| `append_to_excel.py` | 處理 Excel 讀寫與追加邏輯的函式集，預防資料遺失或覆寫。 |
-| `summarizer.py` | 彙整模組，將陣列形式的評論轉換成結構標題、列表的 Markdown 文字。 |
-| `notifier.py` | 發送通知的統籌器，內含發送 Email 及 Teams 訊息的實作邏輯。 |
-| `/data/` | 輕量化本地暫存區，主要存放用於追蹤過往評論 ID 的 JSON 檔案 (`*_seen_ids.json`)，做為去重的依據。 |
-| `/reports/` | 產出檔案儲存區，包含 Excel 資料庫檔案（持續累積）以及每日或每次執行的 Markdown 摘要報告 (`report_*.md`)，與 PAD 執行結果檔 (`latest_result.json`)。 |
+| `main.py` | 專案入口點。控制全域流程（抓取 → AI 分析 → 分類 → Excel → 報告 → 通知），含 GCP Cloud Functions HTTP handler，並回傳標準化 JSON 以供 PAD 解析。Windows 環境自動設定 UTF-8 輸出避免亂碼。 |
+| `config.py` | 集中參數設定檔。透過 `python-dotenv` 讀取 `.env` 檔案載入機密配置，定義 App 清單、抓取限制、AI 設定、通知重試設定。自動偵測 GCP 環境切換路徑（`/tmp`）。 |
+| `scraper.py` | 爬蟲模組。iOS 使用 RSS Feed + 網頁爬蟲偵測回覆；Android 使用 `google-play-scraper`。內含 seen_ids 去重機制。支援回溯模式抓取歷史評論。 |
+| `ai_analyzer.py` | AI 語意分析模組。使用 Google Gemini 2.5 Flash 免費 API 批次分析評論，回傳分類/情緒/優先度/摘要。含關鍵字 fallback 機制。 |
+| `classify_reviews.py` | 分類整合模組。串接 AI 分析與關鍵字分類，統一對外介面。 |
+| `append_to_excel.py` | Excel 讀寫與追加邏輯，自動去重防止資料遺失。 |
+| `summarizer.py` | 彙整模組，將評論轉換為結構化 Markdown 報表。 |
+| `notifier.py` | 多通道通知統籌器。採用 ABC 抽象基底類別設計（EmailChannel + TeamsChannel），NotificationManager 統一管理，含指數退避重試裝飾器。 |
+| `.env` / `.env.example` | 環境變數檔案。包含 SMTP 設定、Teams Webhook URL、Gemini API Key 等機密資訊。 |
+| `requirements.txt` | Python 依賴清單：google-play-scraper、google-generativeai、beautifulsoup4、pandas、openpyxl、requests、python-dotenv、functions-framework。 |
+| `deploy_gcp.sh` | GCP Cloud Functions 一鍵部署腳本。 |
+| `/data/` | 輕量化本地暫存區，存放 `*_seen_ids.json` 做為去重依據。 |
+| `/reports/` | 產出檔案區，包含 Excel 資料庫、每日 Markdown 報告、`latest_result.json`。 |
 
-## 5. 與 RPA (Power Automate Desktop) 整合機制
+## 5. 部署架構
 
-`main.py` 提供特殊的設計以支援 PAD：
-1. **防呆回傳碼**：`0` 代表任務完全順利，`1` 代表部分操作（如通知或寫入）失敗但不影響後續，`2` 代表嚴重致命錯誤。
-2. **結構化輸出 (\_\_PAD_RESULT__)**：程式執行結束前，會將當下所有產出檔案路徑（包括報告 MD 與 Excel 路徑）、抓取筆數、信件主旨等關鍵資訊匯編成 JSON 格式，並以 `__PAD_RESULT__:{json}` 的格式印於標準輸出的最後一行。PAD 能利用截取 `Stdout` 直接讀取這段 JSON，或從 `reports/latest_result.json` 讀取，再依此進行後續流程分派。
+### 方式 A：Windows 本機 + PAD
+- `main.py` 提供 Exit Code（0/1/2）與 `__PAD_RESULT__` JSON 輸出
+- PAD 透過「執行 DOS 指令」觸發，讀取 `reports/latest_result.json` 判斷結果
+- 適合已有 Windows 工作站的環境
 
-## 6. API 依賴與抓取限制
+### 方式 B：GCP Cloud Functions + Cloud Scheduler
+- `main.py` 包含 `cloud_function_handler()` HTTP 入口
+- Cloud Scheduler 每日定時發送 HTTP 請求觸發
+- GCP 免費額度內零成本運行
+- 環境變數透過 `--set-env-vars` 傳入
 
-專案未採用需要官方申請 API Key 的端點，而是使用開源爬蟲套件 (`app_store_scraper` 與 `google_play_scraper`) 來獲取評論：
-- **無官方額度限制**：這排除了付費 API 的請求額度問題。
-- **平台反爬蟲風險**：短時間大量請求有被 Apple 或 Google 封鎖 IP 的風險。
-- **抓取保護機制**：依賴 `config.py` 定義的數量進行增量抓取（預設 Android 一次 `200` 篇、iOS `50` 篇），只抓取最新留言。系統排程上建議降低密集度（例如每日數次即可）以保證長期爬取的穩定性。
+## 6. API 依賴與限制
+
+| 服務 | 用途 | 限制 |
+| --- | --- | --- |
+| iTunes RSS Feed | iOS 評論抓取 | 無官方限制，但頻繁請求可能被暫時封鎖 |
+| App Store 網頁 | iOS 回覆偵測 | Apple 可能阻擋爬蟲，失敗時 graceful degradation |
+| google-play-scraper | Android 評論抓取 | 非官方 API，短時間大量請求有封鎖風險 |
+| Google Gemini 2.5 Flash | AI 語意分析 | 免費方案：每日 1500 次請求、每分鐘 15 次、100 萬 tokens/日 |
+| Gmail SMTP | Email 通知 | 需使用 App 密碼，每日 500 封 |
+| Teams Webhook | Teams 通知 | 無明確限制 |

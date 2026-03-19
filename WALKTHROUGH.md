@@ -1,39 +1,51 @@
-# Walkthrough: 通知系統重構 + Android 抓取優化
+# Walkthrough: 系統優化紀錄
 
-## 變更摘要
+## 最新變更摘要（v2 — AI 語意分析 + iOS 回覆偵測）
 
 | 檔案 | 變更類型 | 說明 |
 |:---|:---:|:---|
-| [config.py](file:///c:/Users/JY/Desktop/App%20評論監測工具/config.py) | 🆕 新增 | 集中設定檔（路徑、App 清單、Email/Teams 設定）|
-| [notifier.py](file:///c:/Users/JY/Desktop/App%20評論監測工具/notifier.py) | 🔄 重寫 | 多通道通知架構（EmailChannel + TeamsChannel）|
-| [scraper.py](file:///c:/Users/JY/Desktop/App%20評論監測工具/scraper.py) | 🔄 重寫 | `reviews()` 取代 `reviews_all()`、去重優化 |
-| [main.py](file:///c:/Users/JY/Desktop/App%20評論監測工具/main.py) | 🔄 重寫 | PAD 結束碼 + JSON 輸出 |
-| [summarizer.py](file:///c:/Users/JY/Desktop/App%20評論監測工具/summarizer.py) | ✏️ 更新 | 加入每 App 統計 |
-| [append_to_excel.py](file:///c:/Users/JY/Desktop/App%20評論監測工具/append_to_excel.py) | ✏️ 更新 | 使用 config 路徑 |
-| [test_android_scraper.py](file:///c:/Users/JY/Desktop/App%20評論監測工具/test_android_scraper.py) | ✏️ 更新 | 匹配新 import |
-| [LOCAL_DEPLOYMENT_GUIDE.md](file:///c:/Users/JY/Desktop/App%20評論監測工具/LOCAL_DEPLOYMENT_GUIDE.md) | 🔄 重寫 | 含 PAD 整合步驟 |
+| [ai_analyzer.py](ai_analyzer.py) | 🆕 新增 | Gemini 2.5 Flash AI 語意分析模組（含關鍵字 fallback）|
+| [scraper.py](scraper.py) | 🔄 重寫 | 新增 iOS 網頁爬蟲偵測開發者回覆（BeautifulSoup）|
+| [notifier.py](notifier.py) | ✏️ 更新 | 加入指數退避重試機制（3 次：2s → 4s → 8s）|
+| [config.py](config.py) | ✏️ 更新 | 新增 AI 設定、通知重試設定、GCP 路徑自動切換 |
+| [main.py](main.py) | ✏️ 更新 | 整合 AI 分析流程、GCP Cloud Functions handler、UTF-8 修復 |
+| [.env.example](.env.example) | ✏️ 更新 | 新增 GEMINI_API_KEY |
+| [requirements.txt](requirements.txt) | ✏️ 更新 | 新增 google-generativeai、beautifulsoup4、functions-framework |
+| [deploy_gcp.sh](deploy_gcp.sh) | 🆕 新增 | GCP Cloud Functions 一鍵部署腳本 |
 
 ---
 
 ## 關鍵設計決策
 
-### 1. 通知架構
+### 1. AI 語意分析架構
 ```
-NotificationChannel (ABC)
-├── EmailChannel     → SMTP (smtplib)
-└── TeamsChannel     → Incoming Webhook (Adaptive Card)
-
-NotificationManager  → 根據 config 自動註冊、統一 send_all()
+classify_reviews.py（對外介面）
+└── ai_analyzer.py
+    ├── Gemini 2.5 Flash API（主要）→ 批次分析，回傳 JSON
+    └── 關鍵字 Fallback（備援）→ 無 API 或配額耗盡時自動切換
 ```
 
-### 2. PAD 整合
-- **結束碼**：`0` 成功 / `1` 部分失敗 / `2` 嚴重錯誤
-- **`reports/latest_result.json`**：PAD 可讀取此檔判斷結果
-- **stdout 最後一行**：`__PAD_RESULT__:{JSON}` 供 `%CommandOutput%` 解析
+### 2. iOS 開發者回覆偵測
+```
+scraper.py
+├── iTunes RSS Feed → 抓取評論內容（穩定）
+└── App Store 網頁爬蟲 → 偵測回覆狀態（BeautifulSoup）
+    ├── 成功 → 比對使用者名稱+評論前20字
+    └── 失敗 → graceful degradation，標記為未知
+```
 
-### 3. Android 去重
-- 改用 `reviews(count=200)` 取代 `reviews_all()`（效率提升 10x+）
-- 移除硬編碼 `cutoff_date`，完全靠 `seen_ids.json` 去重
+### 3. 通知重試機制
+```
+NotificationChannel.send()
+└── _retry_on_failure 裝飾器
+    ├── 第 1 次失敗 → 等 2 秒
+    ├── 第 2 次失敗 → 等 4 秒
+    └── 第 3 次失敗 → 放棄，回傳 False
+```
+
+### 4. 部署架構
+- **Windows 本機**：PAD 排程 → `python main.py` → Exit Code + JSON
+- **GCP 雲端**：Cloud Scheduler → Cloud Functions HTTP → `cloud_function_handler()`
 
 ---
 
@@ -41,25 +53,12 @@ NotificationManager  → 根據 config 自動註冊、統一 send_all()
 
 | 測試項目 | 結果 |
 |:---|:---:|
-| 全部檔案語法編譯 | ✅ 8/8 通過 |
-| NotificationManager 初始化 | ✅ EmailChannel 正確註冊 |
-| classify_reviews 分類 | ✅ 「閃退」→ 程式錯誤 / 負面 / 高 |
-| Android 實際抓取 | ✅ TeamWalk 抓到 186 則評論 |
-| 完整流程 dry-run | ✅ Excel + 報告 + JSON 皆正確產出 |
-| **去重驗證（第二次執行）** | ✅ **0 則新評論**，不重複回報 |
-
----
-
-## 啟用通知的方式
-
-**Email**（設定環境變數）：
-```
-EMAIL_SENDER=yourname@gmail.com
-EMAIL_PASSWORD=your-app-password
-```
-
-**Teams**（設定環境變數）：
-```
-TEAMS_ENABLED=true
-TEAMS_WEBHOOK_URL=https://...webhook.office.com/...
-```
+| Gemini AI 分析（3 則測試評論） | ✅ 分類/情緒/優先度皆正確 |
+| 關鍵字 Fallback（API 不可用時） | ✅ 自動切換 |
+| iOS 網頁爬蟲回覆偵測 | ✅ 正常運作（Apple 阻擋時 graceful degradation） |
+| 通知重試機制 | ✅ 指數退避正常 |
+| Email 通知 | ✅ 發送成功 |
+| Teams 通知（Adaptive Card） | ✅ 發送成功 |
+| Excel 資料庫更新 | ✅ 含 AI 分析欄位 |
+| Windows UTF-8 亂碼修復 | ✅ 中文正常顯示 |
+| 完整端到端流程 | ✅ 18.7 秒完成 |
