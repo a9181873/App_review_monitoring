@@ -84,15 +84,15 @@ def main() -> int:
     notify_results = {}
     if backfill:
         print("[回溯模式] 跳過通知發送（歷史評論不通知）")
-    elif reviews:
+    else:
         notify_results = send_notification(subject, summary)
         for channel, success in notify_results.items():
             status = "成功" if success else "失敗或未設定"
             print(f"  {channel}: {status}")
         if notify_results and not any(notify_results.values()):
             exit_code = max(exit_code, 1)
-    else:
-        print("無新評論，跳過通知")
+        if not reviews:
+            print("無新評論，但仍發送通知")
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
