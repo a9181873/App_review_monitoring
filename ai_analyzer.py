@@ -5,15 +5,12 @@ App 評論監測工具 — AI 語意分析模組
 import json
 import time
 
+import requests
+
 import config
 
 
-def _get_model():
-    """初始化 Gemini 模型。"""
-    from google import genai
-
-    client = genai.Client(api_key=config.GEMINI_API_KEY)
-    return client
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 
 ANALYSIS_PROMPT = """你是一個 App 評論分析專家。請分析以下 App 評論，對每則評論回傳 JSON 格式的分析結果。
@@ -58,12 +55,6 @@ def analyze_reviews_batch(reviews: list[dict], batch_size: int = 10) -> list[dic
         print("[AI] 未設定 GEMINI_API_KEY，使用關鍵字分類 fallback")
         return _keyword_fallback(reviews)
 
-    try:
-        model = _get_model()
-    except Exception as e:
-        print(f"[AI] Gemini 初始化失敗：{e}，使用關鍵字 fallback")
-        return _keyword_fallback(reviews)
-
     analyzed = []
     for i in range(0, len(reviews), batch_size):
         batch = reviews[i : i + batch_size]
@@ -74,10 +65,15 @@ def analyze_reviews_batch(reviews: list[dict], batch_size: int = 10) -> list[dic
             prompt += f"{r.get('rating', '?')}星 - {r.get('review_text', '')}\n"
 
         try:
-            response = model.models.generate_content(
-                model="gemini-2.5-flash", contents=prompt
+            resp = requests.post(
+                GEMINI_API_URL,
+                params={"key": config.GEMINI_API_KEY},
+                headers={"Content-Type": "application/json"},
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+                timeout=60,
             )
-            text = response.text.strip()
+            resp.raise_for_status()
+            text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
             # 移除可能的 markdown code block
             if text.startswith("```"):
                 text = text.split("\n", 1)[1]
