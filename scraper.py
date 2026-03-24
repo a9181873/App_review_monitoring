@@ -15,8 +15,10 @@ import config
 # 只回報此日期之後的評論（避免歷史評論灌爆通知）
 MIN_REVIEW_DATE = datetime(2026, 1, 1)
 
-# 回溯模式的時間範圍（近一年）
-BACKFILL_SINCE = datetime.now() - timedelta(days=365)
+
+def _backfill_since() -> datetime:
+    """回溯模式的時間範圍（近一年），每次呼叫時即時計算。"""
+    return datetime.now() - timedelta(days=365)
 
 
 # ──────────────────────────────────────────────
@@ -32,7 +34,9 @@ def _load_seen_ids(filepath: str) -> set:
 
 def _save_seen_ids(filepath: str, seen_ids: set):
     """將已見評論 ID 集合儲存到 JSON 檔案。"""
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    parent = os.path.dirname(filepath)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(list(seen_ids), f, ensure_ascii=False)
 
@@ -40,17 +44,17 @@ def _save_seen_ids(filepath: str, seen_ids: set):
 # ──────────────────────────────────────────────
 # iOS 開發者回覆偵測（網頁爬蟲）
 # ──────────────────────────────────────────────
-def _check_ios_replies(app_id: str, country: str = "tw") -> dict[str, bool]:
+def _check_ios_replies(app_id: str, country: str = "tw") -> list[tuple[str, bool]]:
     """
     嘗試從 App Store 網頁版抓取開發者回覆狀態。
-    回傳 {key: has_reply} 的對應（key = 使用者名稱:評論前20字）。
-    若爬蟲失敗則回傳空 dict（fallback 為全部標記未回覆）。
+    回傳 [(article_full_text, has_reply), ...] 的列表。
+    若爬蟲失敗則回傳空 list（fallback 為全部標記未回覆）。
     """
     try:
         from bs4 import BeautifulSoup
     except ImportError:
         print("[iOS] beautifulsoup4 未安裝，跳過回覆偵測")
-        return {}
+        return []
 
     url = f"https://apps.apple.com/{country}/app/id{app_id}?see-all=reviews"
     headers = {
@@ -66,39 +70,46 @@ def _check_ios_replies(app_id: str, country: str = "tw") -> dict[str, bool]:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        reply_map = {}
-        review_cards = soup.select(".we-customer-review")
-        for card in review_cards:
-            user_el = card.select_one(".we-customer-review__user")
-            body_el = card.select_one(".we-customer-review__body")
-            reply_el = card.select_one(".we-customer-review__developer-response")
+        reply_list = []
+        # 新版 App Store 網頁使用 Svelte，評論包裝在 <article> 中
+        articles = soup.find_all("article")
+        for article in articles:
+            text_content = article.get_text(separator=" ", strip=True)
+            if not text_content:
+                continue
+            
+            # 判斷是否有開發者回覆區塊 (class 包含 developer-response)
+            has_reply = article.find(
+                lambda t: t.name == "div" and t.get("class") and any("developer-response" in c for c in t["class"])
+            ) is not None
+            
+            reply_list.append((text_content, has_reply))
 
-            if user_el and body_el:
-                user_name = user_el.get_text(strip=True)
-                body_preview = body_el.get_text(strip=True)[:20]
-                key = f"{user_name}:{body_preview}"
-                reply_map[key] = reply_el is not None
-
-        if reply_map:
-            replied_count = sum(1 for v in reply_map.values() if v)
-            print(f"[iOS] 網頁爬蟲成功，{len(reply_map)} 則評論中 {replied_count} 則已回覆")
+        if reply_list:
+            replied_count = sum(1 for _, has_reply in reply_list if has_reply)
+            print(f"[iOS] 網頁爬蟲成功，{len(reply_list)} 則評論中 {replied_count} 則已回覆")
         else:
-            print("[iOS] 網頁爬蟲未取得評論（可能被 Apple 阻擋），回覆狀態標記為未知")
-        return reply_map
+            print("[iOS] 網頁爬蟲未取得評論（可能被 Apple 阻擋或無評論），回覆狀態標記為未知")
+        return reply_list
 
     except Exception as e:
         print(f"[iOS] 網頁爬蟲失敗（{e}），回覆狀態將標記為未知")
-        return {}
+        return []
 
 
-def _match_reply_status(review: dict, reply_map: dict) -> bool:
+def _match_reply_status(review: dict, reply_list: list) -> bool:
     """將 RSS 評論與網頁爬蟲的回覆狀態比對。"""
-    if not reply_map:
+    if not reply_list:
         return False
     user_name = review.get("user_name", "")
     body_preview = review.get("review_text", "")[:20]
-    key = f"{user_name}:{body_preview}"
-    return reply_map.get(key, False)
+    
+    # 在網頁提取的純文字中尋找最符合的評論
+    for article_text, has_reply in reply_list:
+        if user_name in article_text and body_preview in article_text:
+            return has_reply
+            
+    return False
 
 
 # ──────────────────────────────────────────────
@@ -112,7 +123,7 @@ def get_ios_reviews(
     print(f"[iOS] 正在抓取 {app_name} 的評論{'（回溯模式）' if backfill else ''} ...")
 
     max_pages = config.BACKFILL_IOS_PAGES if backfill else 10
-    min_date = BACKFILL_SINCE if backfill else MIN_REVIEW_DATE
+    min_date = _backfill_since() if backfill else MIN_REVIEW_DATE
 
     reviews_data = []
     for page in range(1, max_pages + 1):
@@ -221,7 +232,7 @@ def get_android_reviews(
     lang = lang or config.ANDROID_LANG
     country = country or config.ANDROID_COUNTRY
     count = config.BACKFILL_ANDROID_COUNT if backfill else config.ANDROID_REVIEW_COUNT
-    min_date = BACKFILL_SINCE if backfill else MIN_REVIEW_DATE
+    min_date = _backfill_since() if backfill else MIN_REVIEW_DATE
 
     print(f"[Android] 正在抓取 {app_name} 的評論（{'回溯模式' if backfill else '增量模式'}）...")
 
@@ -252,6 +263,9 @@ def get_android_reviews(
             continue
 
         review_date = r["at"]
+        # 統一為 naive datetime 以避免 aware/naive 比較 TypeError
+        if review_date.tzinfo is not None:
+            review_date = review_date.replace(tzinfo=None)
         if review_date < min_date:
             continue
 
