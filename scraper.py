@@ -2,12 +2,15 @@
 App 評論監測工具 — 評論抓取模組
 支援 iOS App Store 與 Google Play，增量抓取新評論並自動去重。
 支援回溯模式（--backfill）抓取近一年歷史評論。
+使用 app-store-web-scraper 套件抓取 iOS 評論。
 """
 import json
 import os
+import re
 from datetime import datetime, timedelta
 
 import requests
+from app_store_web_scraper import AppStoreEntry
 from google_play_scraper import Sort, reviews
 
 import config
@@ -42,19 +45,19 @@ def _save_seen_ids(filepath: str, seen_ids: set):
 
 
 # ──────────────────────────────────────────────
-# iOS 開發者回覆偵測（網頁爬蟲）
+# iOS 開發者回覆偵測（網頁爬蟲，使用 Review ID 比對）
 # ──────────────────────────────────────────────
-def _check_ios_replies(app_id: str, country: str = "tw") -> list[tuple[str, bool]]:
+def _check_ios_replies_by_id(app_id: str, country: str = "tw") -> dict[str, bool]:
     """
-    嘗試從 App Store 網頁版抓取開發者回覆狀態。
-    回傳 [(article_full_text, has_reply), ...] 的列表。
-    若爬蟲失敗則回傳空 list（fallback 為全部標記未回覆）。
+    從 App Store 網頁版抓取開發者回覆狀態，以 review_id 為 key。
+    回傳 {review_id: has_reply} 的字典。
+    若爬蟲失敗則回傳空 dict（fallback 為全部標記未回覆）。
     """
     try:
         from bs4 import BeautifulSoup
     except ImportError:
         print("[iOS] beautifulsoup4 未安裝，跳過回覆偵測")
-        return []
+        return {}
 
     url = f"https://apps.apple.com/{country}/app/id{app_id}?see-all=reviews"
     headers = {
@@ -68,97 +71,70 @@ def _check_ios_replies(app_id: str, country: str = "tw") -> list[tuple[str, bool
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        html = resp.text
 
-        reply_list = []
-        # 新版 App Store 網頁使用 Svelte，評論包裝在 <article> 中
+        reply_map: dict[str, bool] = {}
+
+        # 從 HTML 中直接用正則表達式提取 review ID 和回覆狀態
+        # App Store HTML 結構：<article aria-labelledby="review-{ID}-title">
+        # 若該 article 內含 developer-response-container 則為已回覆
+        soup = BeautifulSoup(html, "html.parser")
         articles = soup.find_all("article")
         for article in articles:
-            text_content = article.get_text(separator=" ", strip=True)
-            if not text_content:
+            # 從 aria-labelledby 提取 review ID
+            label_id = article.get("aria-labelledby", "")
+            match = re.search(r"review-(\d+)-title", label_id)
+            if not match:
                 continue
-            
-            # 判斷是否有開發者回覆區塊 (class 包含 developer-response)
-            has_reply = article.find(
-                lambda t: t.name == "div" and t.get("class") and any("developer-response" in c for c in t["class"])
-            ) is not None
-            
-            reply_list.append((text_content, has_reply))
+            review_id = match.group(1)
 
-        if reply_list:
-            replied_count = sum(1 for _, has_reply in reply_list if has_reply)
-            print(f"[iOS] 網頁爬蟲成功，{len(reply_list)} 則評論中 {replied_count} 則已回覆")
+            # 判斷是否有開發者回覆區塊
+            has_reply = bool(article.find(
+                lambda t: t.name == "div" and t.get("class")
+                and any("developer-response" in c for c in t["class"])
+            ))
+            reply_map[review_id] = has_reply
+
+        if reply_map:
+            replied_count = sum(1 for v in reply_map.values() if v)
+            print(f"[iOS] 網頁爬蟲成功，{len(reply_map)} 則評論中 {replied_count} 則已回覆")
         else:
             print("[iOS] 網頁爬蟲未取得評論（可能被 Apple 阻擋或無評論），回覆狀態標記為未知")
-        return reply_list
+        return reply_map
 
     except Exception as e:
         print(f"[iOS] 網頁爬蟲失敗（{e}），回覆狀態將標記為未知")
-        return []
-
-
-def _match_reply_status(review: dict, reply_list: list) -> bool:
-    """將 RSS 評論與網頁爬蟲的回覆狀態比對。"""
-    if not reply_list:
-        return False
-    user_name = review.get("user_name", "")
-    body_preview = review.get("review_text", "")[:20]
-    
-    # 在網頁提取的純文字中尋找最符合的評論
-    for article_text, has_reply in reply_list:
-        if user_name in article_text and body_preview in article_text:
-            return has_reply
-            
-    return False
+        return {}
 
 
 # ──────────────────────────────────────────────
-# iOS 評論抓取
+# iOS 評論抓取（使用 app-store-web-scraper）
 # ──────────────────────────────────────────────
 def get_ios_reviews(
     app_name: str, app_id: str, country: str = None, backfill: bool = False
 ) -> list[dict]:
-    """抓取 iOS App Store 新評論 (透過官方 RSS Feed)。"""
+    """抓取 iOS App Store 新評論（使用 app-store-web-scraper 套件）。"""
     country = country or config.IOS_COUNTRY
     print(f"[iOS] 正在抓取 {app_name} 的評論{'（回溯模式）' if backfill else ''} ...")
 
-    max_pages = config.BACKFILL_IOS_PAGES if backfill else 10
     min_date = _backfill_since() if backfill else MIN_REVIEW_DATE
+    limit = 500 if backfill else 500  # 套件最多支援 500 則/國家
 
-    reviews_data = []
-    for page in range(1, max_pages + 1):
-        url = (
-            f"https://itunes.apple.com/{country}/rss/customerreviews/"
-            f"page={page}/id={app_id}/sortby=mostrecent/json"
-        )
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-        except Exception as e:
-            print(f"[iOS] 抓取 {app_name} 第 {page} 頁失敗：{e}")
-            break
+    try:
+        app = AppStoreEntry(app_id=app_id, country=country)
+        reviews_data = list(app.reviews(limit=limit))
+    except Exception as e:
+        print(f"[iOS] 抓取 {app_name} 失敗：{e}")
+        return []
 
-        feed = data.get("feed", {})
-        entries = feed.get("entry", [])
-        if not entries:
-            break
-
-        if isinstance(entries, dict):
-            entries = [entries]
-
-        page_reviews = [entry for entry in entries if "author" in entry]
-        if not page_reviews:
-            break
-        reviews_data.extend(page_reviews)
-        print(f"[iOS] {app_name} 第 {page} 頁：{len(page_reviews)} 則評論")
+    print(f"[iOS] {app_name}：從套件取得 {len(reviews_data)} 則評論")
 
     if not reviews_data:
         print(f"[iOS] {app_name} 無評論資料")
         return []
 
-    # 嘗試網頁爬蟲偵測回覆狀態
-    reply_map = _check_ios_replies(app_id, country)
+    # 嘗試網頁爬蟲偵測回覆狀態（以 review_id 為 key）
+    reply_map = _check_ios_replies_by_id(app_id, country)
 
     # 載入已見 ID
     seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_ios_seen_ids.json")
@@ -168,43 +144,39 @@ def get_ios_reviews(
     current_ids = set()
 
     for r in reviews_data:
-        review_id = r.get("id", {}).get("label")
-        if not review_id:
-            continue
-
+        review_id = str(r.id)
         current_ids.add(review_id)
 
         # 回溯模式不檢查 seen_ids（全部抓回來）
         if not backfill and review_id in seen_ids:
             continue
 
-        date_str = r.get("updated", {}).get("label", "")
         try:
-            date_obj = datetime.fromisoformat(date_str).replace(tzinfo=None)
+            date_obj = r.date.replace(tzinfo=None)
             formatted_date = date_obj.strftime("%Y-%m-%d %H:%M:%S")
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             date_obj = None
-            formatted_date = date_str
+            formatted_date = str(r.date)
 
         if date_obj and date_obj < min_date:
             continue
 
+        # 用 review_id 查詢回覆狀態
+        is_replied = reply_map.get(review_id, False)
+
         review_dict = {
             "platform": "iOS",
             "app_name": app_name,
-            "user_name": r.get("author", {}).get("name", {}).get("label", "Unknown"),
-            "rating": int(r.get("im:rating", {}).get("label", 0)),
-            "review_text": r.get("content", {}).get("label", ""),
+            "user_name": r.user_name,
+            "rating": r.rating,
+            "review_text": r.content,
             "date": formatted_date,
-            "is_replied": False,
+            "is_replied": is_replied,
             "review_id": review_id,
         }
 
-        # 用網頁爬蟲結果更新回覆狀態
-        review_dict["is_replied"] = _match_reply_status(review_dict, reply_map)
-
         # 過濾已回覆的 iOS 評論（僅在非回溯模式且設定開啟時）
-        if not backfill and config.IGNORE_REPLIED_IOS_REVIEWS and review_dict["is_replied"]:
+        if not backfill and config.IGNORE_REPLIED_IOS_REVIEWS and is_replied:
             continue
 
         new_reviews.append(review_dict)
