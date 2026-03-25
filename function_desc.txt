@@ -1,0 +1,32 @@
+﻿buildConfig:
+  automaticUpdatePolicy: {}
+  build: projects/643422106244/locations/asia-east1/builds/f0c21f09-ac8e-4044-ac13-1a2254d9c64c
+  dockerRegistry: ARTIFACT_REGISTRY
+  dockerRepository: projects/project-45f9a5d1-4ff8-4dae-b47/locations/asia-east1/repositories/gcf-artifacts
+  entryPoint: cloud_function_handler
+  runtime: python312
+  serviceAccount: projects/project-45f9a5d1-4ff8-4dae-b47/serviceAccounts/643422106244-compute@developer.gserviceaccount.com
+  source:
+    storageSource:
+      bucket: gcf-v2-sources-643422106244-asia-east1
+      generation: '1773892946219071'
+      object: app-review-monitor/function-source.zip
+  sourceProvenance:
+    resolvedStorageSource:
+      bucket: gcf-v2-sources-643422106244-asia-east1
+      generation: '1773892946219071'
+      object: app-review-monitor/function-source.zip
+createTime: '2026-03-19T04:02:26.834995187Z'
+environment: GEN_2
+labels:
+  deployment-tool: cli-gcloud
+name: projects/project-45f9a5d1-4ff8-4dae-b47/locations/asia-east1/functions/app-review-monitor
+satisfiesPzi: true
+state: UNKNOWN
+stateMessages:
+- message: Cloud Run service projects/project-45f9a5d1-4ff8-4dae-b47/locations/asia-east1/services/app-review-monitor
+    for the function was not found. The function will not work correctly. Please redeploy.
+  severity: ERROR
+  type: CloudRunServiceNotFound
+updateTime: '2026-03-23T02:44:59.299802620Z'
+url: https://asia-east1-project-45f9a5d1-4ff8-4dae-b47.cloudfunctions.net/app-review-monitor
