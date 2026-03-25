@@ -4,6 +4,7 @@ App 評論監測工具 — 多通道通知模組
 透過 NotificationManager 統一管理所有已啟用的通知管道。
 含指數退避重試機制。
 """
+import html as html_module
 import json
 import smtplib
 import time
@@ -50,8 +51,16 @@ class NotificationChannel(ABC):
         """單次發送嘗試。"""
         ...
 
+    def _is_configured(self) -> bool:
+        """檢查此管道是否已正確設定，未設定則跳過重試。"""
+        return True
+
     def send(self, subject: str, body: str) -> bool:
-        """帶重試的發送。"""
+        """帶重試的發送。若未設定則直接跳過。"""
+        if not self._is_configured():
+            name = type(self).__name__
+            print(f"[{name}] 尚未完成設定，跳過通知。")
+            return False
         return _retry_on_failure(self._send_once)(subject, body)
 
 
@@ -75,18 +84,17 @@ class EmailChannel(NotificationChannel):
         self.password = password
         self.recipients = recipients
 
-    def _send_once(self, subject: str, body: str) -> bool:
-        if not self.sender or not self.password:
-            print("[Email] 尚未設定寄件人或密碼，跳過 Email 通知。")
-            return False
+    def _is_configured(self) -> bool:
+        return bool(self.sender and self.password)
 
+    def _send_once(self, subject: str, body: str) -> bool:
         msg = MIMEMultipart("alternative")
         msg["From"] = self.sender
         msg["To"] = ", ".join(self.recipients)
         msg["Subject"] = subject
 
         msg.attach(MIMEText(body, "plain", "utf-8"))
-        html_body = body.replace("\n", "<br>")
+        html_body = html_module.escape(body).replace("\n", "<br>")
         msg.attach(MIMEText(f"<html><body>{html_body}</body></html>", "html", "utf-8"))
 
         try:
@@ -110,11 +118,10 @@ class TeamsChannel(NotificationChannel):
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
 
-    def _send_once(self, subject: str, body: str) -> bool:
-        if not self.webhook_url:
-            print("[Teams] 尚未設定 Webhook URL，跳過 Teams 通知。")
-            return False
+    def _is_configured(self) -> bool:
+        return bool(self.webhook_url)
 
+    def _send_once(self, subject: str, body: str) -> bool:
         try:
             import requests
         except ImportError:

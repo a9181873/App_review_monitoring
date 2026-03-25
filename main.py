@@ -32,7 +32,7 @@ from scraper import run_scraper
 from summarizer import generate_summary
 
 
-def main() -> int:
+def main(backfill: bool = None) -> int:
     """
     執行所有流程，回傳結束碼：
       0 = 成功
@@ -40,7 +40,8 @@ def main() -> int:
       2 = 嚴重錯誤
     """
     config.ensure_dirs()
-    backfill = "--backfill" in sys.argv
+    if backfill is None:
+        backfill = "--backfill" in sys.argv
     start_time = datetime.now()
 
     mode_label = "回溯模式（近一年歷史）" if backfill else "增量模式"
@@ -137,8 +138,7 @@ def cloud_function_handler(request):
 def cloud_function_backfill_handler(request):
     """Cloud Functions HTTP 觸發入口（回溯模式）。"""
     try:
-        sys.argv.append("--backfill")
-        exit_code = main()
+        exit_code = main(backfill=True)
         status = "success" if exit_code == 0 else "partial_failure"
         return {"status": status, "exit_code": exit_code}, 200
     except Exception as e:

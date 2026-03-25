@@ -118,7 +118,7 @@ def get_ios_reviews(
     print(f"[iOS] 正在抓取 {app_name} 的評論{'（回溯模式）' if backfill else ''} ...")
 
     min_date = _backfill_since() if backfill else MIN_REVIEW_DATE
-    limit = 500 if backfill else 500  # 套件最多支援 500 則/國家
+    limit = 500  # 套件最多支援 500 則/國家
 
     try:
         app = AppStoreEntry(app_id=app_id, country=country)
