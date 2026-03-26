@@ -133,8 +133,8 @@ def get_ios_reviews(
         print(f"[iOS] {app_name} 無評論資料")
         return []
 
-    # 嘗試網頁爬蟲偵測回覆狀態（以 review_id 為 key）
-    reply_map = _check_ios_replies_by_id(app_id, country)
+    # 因應需求變更（只需通知新評論），停用脆弱的網頁爬蟲回覆偵測
+    reply_map = {}
 
     # 載入已見 ID
     seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_ios_seen_ids.json")
