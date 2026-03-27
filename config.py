@@ -51,12 +51,6 @@ ANDROID_COUNTRY = "tw"
 IOS_REVIEW_COUNT = 50
 IOS_COUNTRY = "tw"
 
-# 是否過濾掉已回覆的 Android 評論（True = 只通知未回覆的）
-IGNORE_REPLIED_ANDROID_REVIEWS = False
-
-# 是否過濾掉已回覆的 iOS 評論（True = 只通知未回覆的）
-IGNORE_REPLIED_IOS_REVIEWS = False
-
 # ──────────────────────────────────────────────
 # AI 語意分析設定 (Google Gemini Free Tier)
 # ──────────────────────────────────────────────

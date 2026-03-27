@@ -10,11 +10,13 @@
 ## 核心特色 (Features)
 
 *   **雙平台支援**：同時監控 iOS (App Store) 與 Android (Google Play) 評論。
-*   **穩定的 iOS 爬蟲**：採用 Apple 官方 iTunes RSS Feed 解析，100% 免疫反爬蟲機制。
-*   **iOS 開發者回覆偵測**：透過 App Store 網頁爬蟲（BeautifulSoup）偵測開發者是否已回覆，只通知未回覆的評論。
+*   **穩定的 iOS 爬蟲**：採用 `app-store-web-scraper` 套件抓取 App Store 評論。
 *   **AI 語意分析**：整合 Google Gemini 2.5 Flash（免費方案），自動分類評論為「程式錯誤 / 功能建議 / UX體驗 / 帳號問題 / 效能問題」等類別，並標記情緒與優先度。API 不可用時自動 fallback 至關鍵字分類。
+*   **智慧通知**：僅通知今天/昨天的新評論，舊評論靜默存入資料庫，不灌爆通知。
 *   **增量抓取防呆機制**：透過 `data/` 目錄保存 `seen_ids.json`，確保每次執行只處理「全新的客訴」，過濾雜訊。
 *   **本地永久資料庫**：每次抓取後會自動彙整、去重複，並寫入本機 `reports/` 目錄下的 Excel 檔案 (`App評論監測_資料庫.xlsx`)。
+*   **週報/月報彙整**：從 Excel 資料庫產出統計報告，含平均星等趨勢、情緒分布、各 App 星等分布、低分評論摘要。
+*   **關鍵議題追蹤**：自動歸納近期高頻問題（如閃退、登入異常），優先用 Gemini AI 分析，fallback 到關鍵字比對，標示嚴重度。
 *   **多通道推播（含重試）**：支援 Email (SMTP) 報表寄送與 Microsoft Teams (Adaptive Card) 頻道即時推播，內建指數退避重試機制（預設 3 次）。
 *   **回溯模式**：`python main.py --backfill` 可一次抓取近一年歷史評論 + AI 分析 + 存入 Excel（不發通知）。
 *   **多平台部署**：支援 Windows 本機（PAD 排程）、GCP Cloud Functions + Cloud Scheduler 雲端部署。
@@ -25,7 +27,7 @@
 
 *   **語言**: Python 3.10+
 *   **Android 爬取**: `google-play-scraper`
-*   **iOS 爬取**: `requests` (iTunes RSS API) + `beautifulsoup4` (網頁爬蟲偵測回覆)
+*   **iOS 爬取**: `app-store-web-scraper`
 *   **AI 分析**: `google-generativeai` (Gemini 2.5 Flash 免費方案)
 *   **資料處理**: `pandas`, `openpyxl`
 *   **環境管理**: `python-dotenv`
@@ -62,6 +64,15 @@ python main.py
 
 # 回溯模式（抓近一年歷史 + AI 分析 + 存入 Excel，不發通知）
 python main.py --backfill
+
+# 週報（近 7 天統計 + 趨勢分析）
+python main.py --weekly
+
+# 月報（近 30 天統計 + 趨勢分析）
+python main.py --monthly
+
+# 關鍵議題追蹤報告
+python main.py --issues
 ```
 
 > **提示**：若想重置抓取紀錄，刪除 `data/` 目錄下的所有 JSON 檔案即可。
@@ -90,6 +101,8 @@ App 評論監測工具/
 ├── classify_reviews.py  # 分類整合（AI 優先，fallback 關鍵字）
 ├── append_to_excel.py   # Excel 資料庫寫入
 ├── summarizer.py        # Markdown 摘要報告產生
+├── periodic_report.py   # 週報/月報彙整（從 Excel 資料庫統計）
+├── issue_tracker.py     # 關鍵議題追蹤（AI + 關鍵字 fallback）
 ├── notifier.py          # Email + Teams 通知（含指數退避重試）
 ├── config.py            # 集中設定檔（環境變數讀取）
 ├── .env.example         # 環境變數範本
