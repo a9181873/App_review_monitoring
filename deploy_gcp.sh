@@ -18,7 +18,7 @@
 set -e
 
 # ── 設定區 ──────────────────────────────────────
-PROJECT_ID="project20260401"
+PROJECT_ID="project-45f9a5d1-4ff8-4dae-b47"
 REGION="asia-east1"           # 台灣最近的區域
 FUNCTION_NAME="app-review-monitor"
 BACKFILL_FUNCTION_NAME="app-review-monitor-backfill"
@@ -71,11 +71,11 @@ gcloud services enable \
 # ── 建立 GCS Bucket（用於持久化 Excel / seen_ids）──
 echo ""
 echo "[1.5/6] 建立 GCS Bucket: ${GCS_BUCKET}..."
-if ! gsutil ls -b "gs://${GCS_BUCKET}" &>/dev/null; then
-    gsutil mb -p "${PROJECT_ID}" -l "${REGION}" "gs://${GCS_BUCKET}"
-    echo "  ✓ 已建立 Bucket: ${GCS_BUCKET}"
-else
+if gcloud storage buckets describe "gs://${GCS_BUCKET}" --project="${PROJECT_ID}" &>/dev/null; then
     echo "  ✓ Bucket 已存在: ${GCS_BUCKET}"
+else
+    gcloud storage buckets create "gs://${GCS_BUCKET}" --project="${PROJECT_ID}" --location="${REGION}"
+    echo "  ✓ 已建立 Bucket: ${GCS_BUCKET}"
 fi
 
 # ── 建立/更新 Secrets ──────────────────────────
