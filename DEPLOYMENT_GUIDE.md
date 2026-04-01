@@ -11,23 +11,25 @@ graph LR
     subgraph GCP["Google Cloud Platform"]
         Scheduler["Cloud Scheduler<br/>每日 11:00 觸發"]
         CF["Cloud Functions Gen2<br/>app-review-monitor<br/>Python 3.12 / 512MB / 540s"]
-        EnvVars["環境變數<br/>GEMINI_API_KEY<br/>EMAIL_PASSWORD<br/>TEAMS_WEBHOOK_URL"]
+        GCS["GCS Bucket<br/>Excel 資料庫<br/>seen_ids.json"]
+        Secrets["Secret Manager<br/>API Key / 密碼"]
     end
 
     subgraph External["外部服務"]
-        AppStore["App Store<br/>RSS + 網頁爬蟲"]
+        AppStore["App Store<br/>網頁爬蟲"]
         PlayStore["Google Play Store"]
         GeminiAPI["Gemini 2.5 Flash API"]
-        SMTP["Gmail SMTP"]
+        SMTP["Gmail SMTP<br/>含 Excel 附件"]
         TeamsWH["Teams Webhook"]
     end
 
     Scheduler -->|HTTP POST| CF
-    EnvVars -.-> CF
+    Secrets -.-> CF
+    CF <-->|持久化資料| GCS
     CF -->|抓取 iOS 評論| AppStore
     CF -->|抓取 Android 評論| PlayStore
     CF -->|AI 語意分析| GeminiAPI
-    CF -->|Email 通知| SMTP
+    CF -->|Email 通知 + Excel 附件| SMTP
     CF -->|Teams 通知| TeamsWH
 ```
 
@@ -50,7 +52,9 @@ gcloud services enable \
   cloudfunctions.googleapis.com \
   cloudscheduler.googleapis.com \
   cloudbuild.googleapis.com \
-  run.googleapis.com
+  run.googleapis.com \
+  secretmanager.googleapis.com \
+  storage.googleapis.com
 ```
 
 ---
@@ -115,6 +119,8 @@ gcloud scheduler jobs run app-review-daily --location=asia-east1
 | Cloud Functions | 200 萬次調用/月 | ~30 次/月 |
 | Cloud Scheduler | 3 個 job 免費 | 1 個 job |
 | Cloud Build | 120 分鐘/天 | ~2 分鐘/次部署 |
+| Cloud Storage (GCS) | 5 GB/月（美國區免費） | < 1 MB |
+| Secret Manager | 6 個 secret 版本免費 | 4 個 secret |
 | 出站流量 | 1 GB/月 | 極少 |
 
 ---
@@ -122,8 +128,10 @@ gcloud scheduler jobs run app-review-daily --location=asia-east1
 ## 5. 注意事項
 
 - **GCP 環境下**，`config.py` 會自動偵測 `FUNCTION_TARGET` 環境變數，將資料目錄切換至 `/tmp`（Cloud Functions 唯一可寫入的目錄）
-- Cloud Functions 的 `/tmp` 是暫存空間，每次冷啟動會清空。因此 `seen_ids.json` 不會持久保存，每次執行可能會重複偵測部分評論（但通知內容仍然正確）
-- 如需持久化 `seen_ids`，可考慮使用 Cloud Storage 或 Firestore
+- **資料持久化**：`storage.py` 會在啟動時從 GCS Bucket 下載 `seen_ids.json` 與 `Excel 資料庫` 到 `/tmp`，執行完畢後再上傳回 GCS，確保資料不會因冷啟動消失
+- **Cold Start 增量保護**：若 GCS 中找不到 `seen_ids.json`（首次部署），程式會自動限制只抓近 2 天評論，避免超過 540s 執行上限
+- **Email 附件**：每日通知 Email 會自動附帶最新的 Excel 資料庫檔案（`App評論監測_資料庫.xlsx`）
+- **搬到 PAD**：`storage.py` 會自動偵測環境。在本機 / PAD 上直接使用本地檔案系統，不需要修改任何程式碼
 - Gemini API Key 建議從 [Google AI Studio](https://aistudio.google.com/apikey) 取得（有免費額度）
 
 ---

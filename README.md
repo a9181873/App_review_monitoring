@@ -14,10 +14,13 @@
 *   **AI 語意分析**：整合 Google Gemini 2.5 Flash（免費方案），自動分類評論為「程式錯誤 / 功能建議 / UX體驗 / 帳號問題 / 效能問題」等類別，並標記情緒與優先度。API 不可用時自動 fallback 至關鍵字分類。
 *   **智慧通知**：僅通知今天/昨天的新評論，舊評論靜默存入資料庫，不灌爆通知。
 *   **增量抓取防呆機制**：透過 `data/` 目錄保存 `seen_ids.json`，確保每次執行只處理「全新的客訴」，過濾雜訊。
-*   **本地永久資料庫**：每次抓取後會自動彙整、去重複，並寫入本機 `reports/` 目錄下的 Excel 檔案 (`App評論監測_資料庫.xlsx`)。
+*   **雲端 / 本機雙模式儲存（storage.py）**：自動偵測執行環境，GCP 上使用 GCS Bucket 持久化資料（seen_ids + Excel），本機 / PAD 上則直接讀寫本地檔案。**未來從 GCP 搬到 PAD 不需改任何程式碼**。
+*   **Cold Start 增量保護**：當 GCP 環境偵測到 `seen_ids.json` 不存在（首次 / 冷啟動）時，自動限制只抓取近 2 天評論，避免超過 Cloud Functions 9 分鐘上限。
+*   **本地永久資料庫**：每次抓取後會自動彙整、去重複，並寫入 Excel 檔案 (`App評論監測_資料庫.xlsx`)，GCP 環境同步至 GCS Bucket。
+*   **Email 附件功能**：每日通知 Email 會自動附帶最新的 Excel 資料庫檔案，方便離線查閱與備份。
 *   **週報/月報彙整**：從 Excel 資料庫產出統計報告，含平均星等趨勢、情緒分布、各 App 星等分布、低分評論摘要。
 *   **關鍵議題追蹤**：自動歸納近期高頻問題（如閃退、登入異常），優先用 Gemini AI 分析，fallback 到關鍵字比對，標示嚴重度。
-*   **多通道推播（含重試）**：支援 Email (SMTP) 報表寄送與 Microsoft Teams (Adaptive Card) 頻道即時推播，內建指數退避重試機制（預設 3 次）。
+*   **多通道推播（含重試）**：支援 Email (SMTP) 報表寄送（含附件）與 Microsoft Teams (Adaptive Card) 頻道即時推播，內建指數退避重試機制（預設 3 次）。
 *   **回溯模式**：`python main.py --backfill` 可一次抓取近一年歷史評論 + AI 分析 + 存入 Excel（不發通知）。
 *   **多平台部署**：支援 Windows 本機（PAD 排程）、GCP Cloud Functions + Cloud Scheduler 雲端部署。
 
@@ -30,6 +33,7 @@
 *   **iOS 爬取**: `app-store-web-scraper`
 *   **AI 分析**: `google-generativeai` (Gemini 2.5 Flash 免費方案)
 *   **資料處理**: `pandas`, `openpyxl`
+*   **雲端儲存**: `google-cloud-storage` (GCS 持久化)
 *   **環境管理**: `python-dotenv`
 *   **部署**: GCP Cloud Functions (Gen2) + Cloud Scheduler / Windows PAD
 
@@ -99,15 +103,16 @@ App 評論監測工具/
 ├── scraper.py           # iOS/Android 評論抓取與去重
 ├── ai_analyzer.py       # Gemini AI 語意分析（含關鍵字 fallback）
 ├── classify_reviews.py  # 分類整合（AI 優先，fallback 關鍵字）
+├── storage.py           # 儲存抽象層（GCS / 本機自動切換）
 ├── append_to_excel.py   # Excel 資料庫寫入
 ├── summarizer.py        # Markdown 摘要報告產生
 ├── periodic_report.py   # 週報/月報彙整（從 Excel 資料庫統計）
 ├── issue_tracker.py     # 關鍵議題追蹤（AI + 關鍵字 fallback）
-├── notifier.py          # Email + Teams 通知（含指數退避重試）
+├── notifier.py          # Email + Teams 通知（含附件 + 指數退避重試）
 ├── config.py            # 集中設定檔（環境變數讀取）
 ├── .env.example         # 環境變數範本
 ├── requirements.txt     # Python 依賴清單
-├── deploy_gcp.sh        # GCP 一鍵部署腳本
+├── deploy_gcp.sh        # GCP 一鍵部署腳本（含 GCS Bucket 自動建立）
 ├── data/                # [自動生成] 已讀 review_id 的 JSON 緩存
 └── reports/             # [自動生成] Excel 資料庫、Markdown 報表、JSON 結果
 ```
