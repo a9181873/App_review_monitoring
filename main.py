@@ -34,6 +34,7 @@ from notifier import send_notification
 from scraper import run_scraper
 from issue_tracker import detect_issues, format_issues_report
 from periodic_report import generate_periodic_report
+from storage import sync_down, sync_up
 from summarizer import generate_summary
 
 
@@ -73,9 +74,14 @@ def main(backfill: bool = None) -> int:
         print(f"{ai_label}完成\n")
 
     # 3. 更新 Excel 資料庫（所有新評論都存檔）
-    excel_path = os.path.join(config.REPORTS_DIR, "App評論監測_資料庫.xlsx")
+    excel_filename = "App評論監測_資料庫.xlsx"
+    excel_path = os.path.join(config.REPORTS_DIR, excel_filename)
     try:
+        # 從 GCS 下載舊 Excel（GCP 環境才會生效）
+        sync_down(excel_filename, config.REPORTS_DIR)
         append_to_excel(reviews, excel_path)
+        # 將更新後的 Excel 上傳回 GCS
+        sync_up(excel_filename, config.REPORTS_DIR)
     except Exception as e:
         print(f"寫入 Excel 失敗：{e}")
         exit_code = 1
@@ -112,7 +118,10 @@ def main(backfill: bool = None) -> int:
     elif not recent_reviews:
         print("無近期新評論，跳過通知發送")
     else:
-        notify_results = send_notification(subject, summary)
+        notify_results = send_notification(
+            subject, summary,
+            attachments=[excel_path] if os.path.exists(excel_path) else None,
+        )
         for channel, success in notify_results.items():
             status = "成功" if success else "失敗或未設定"
             print(f"  {channel}: {status}")

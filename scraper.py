@@ -12,6 +12,7 @@ from app_store_web_scraper import AppStoreEntry
 from google_play_scraper import Sort, reviews
 
 import config
+from storage import sync_down, sync_up
 
 
 def _backfill_since() -> datetime:
@@ -22,21 +23,30 @@ def _backfill_since() -> datetime:
 # ──────────────────────────────────────────────
 # 已見 ID 管理
 # ──────────────────────────────────────────────
-def _load_seen_ids(filepath: str) -> set:
-    """從 JSON 檔案載入已見評論 ID 集合。"""
+def _load_seen_ids(filepath: str) -> tuple[set, bool]:
+    """從 JSON 檔案載入已見評論 ID 集合。回傳 (seen_ids, is_fresh)。"""
+    # 先嘗試從 GCS 同步（GCP 環境才會生效）
+    filename = os.path.basename(filepath)
+    sync_down(filename)
+
     if os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
-            return set(json.load(f))
-    return set()
+            ids = set(json.load(f))
+            return ids, False
+    return set(), True  # True = 首次執行，沒有歷史紀錄
 
 
 def _save_seen_ids(filepath: str, seen_ids: set):
-    """將已見評論 ID 集合儲存到 JSON 檔案。"""
+    """將已見評論 ID 集合儲存到 JSON 檔案，並同步至 GCS。"""
     parent = os.path.dirname(filepath)
     if parent:
         os.makedirs(parent, exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(list(seen_ids), f, ensure_ascii=False)
+
+    # 同步至 GCS（GCP 環境才會生效）
+    filename = os.path.basename(filepath)
+    sync_up(filename)
 
 
 # ──────────────────────────────────────────────
@@ -67,7 +77,12 @@ def get_ios_reviews(
 
     # 載入已見 ID
     seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_ios_seen_ids.json")
-    seen_ids = _load_seen_ids(seen_ids_file)
+    seen_ids, is_fresh = _load_seen_ids(seen_ids_file)
+
+    # 增量保護：首次執行且非回溯模式時，只抓近 2 天的評論避免超時
+    if is_fresh and not backfill:
+        min_date = datetime.now() - timedelta(days=2)
+        print(f"[iOS] {app_name}：首次執行，僅抓取近 2 天評論（增量保護）")
 
     new_reviews = []
     current_ids = set()
@@ -141,7 +156,12 @@ def get_android_reviews(
 
     # 載入已見 ID
     seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_android_seen_ids.json")
-    seen_ids = _load_seen_ids(seen_ids_file)
+    seen_ids, is_fresh = _load_seen_ids(seen_ids_file)
+
+    # 增量保護：首次執行且非回溯模式時，只抓近 2 天的評論避免超時
+    if is_fresh and not backfill:
+        min_date = datetime.now() - timedelta(days=2)
+        print(f"[Android] {app_name}：首次執行，僅抓取近 2 天評論（增量保護）")
 
     new_reviews = []
     current_ids = set()

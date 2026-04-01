@@ -18,7 +18,7 @@
 set -e
 
 # ── 設定區 ──────────────────────────────────────
-PROJECT_ID="project-45f9a5d1-4ff8-4dae-b47"
+PROJECT_ID="project20260401"
 REGION="asia-east1"           # 台灣最近的區域
 FUNCTION_NAME="app-review-monitor"
 BACKFILL_FUNCTION_NAME="app-review-monitor-backfill"
@@ -28,6 +28,7 @@ TIMEZONE="Asia/Taipei"
 RUNTIME="python312"
 MEMORY="512MB"
 TIMEOUT="540s"                # 9 分鐘（Cloud Functions 最大 540s）
+GCS_BUCKET="${PROJECT_ID}-app-review-data"  # GCS Bucket for 持久化
 
 # ── 敏感變數名稱（存入 Secret Manager）─────────
 SECRET_KEYS=("EMAIL_PASSWORD" "GEMINI_API_KEY" "TEAMS_WEBHOOK_URL" "EMAIL_SENDER")
@@ -64,7 +65,18 @@ gcloud services enable \
     cloudbuild.googleapis.com \
     run.googleapis.com \
     secretmanager.googleapis.com \
+    storage.googleapis.com \
     --quiet
+
+# ── 建立 GCS Bucket（用於持久化 Excel / seen_ids）──
+echo ""
+echo "[1.5/6] 建立 GCS Bucket: ${GCS_BUCKET}..."
+if ! gsutil ls -b "gs://${GCS_BUCKET}" &>/dev/null; then
+    gsutil mb -p "${PROJECT_ID}" -l "${REGION}" "gs://${GCS_BUCKET}"
+    echo "  ✓ 已建立 Bucket: ${GCS_BUCKET}"
+else
+    echo "  ✓ Bucket 已存在: ${GCS_BUCKET}"
+fi
 
 # ── 建立/更新 Secrets ──────────────────────────
 echo ""
@@ -106,14 +118,12 @@ echo "  ✓ 服務帳號 ${SA_EMAIL} 已授權"
 # ── 組裝部署參數 ────────────────────────────────
 # 非敏感環境變數
 ENV_VARS=""
+# 加入 GCS Bucket 名稱
+ENV_VARS="GCS_BUCKET_NAME=${GCS_BUCKET},GCP_PROJECT_ID=${PROJECT_ID}"
 for key in "${PLAIN_KEYS[@]}"; do
     val="${ENV_MAP[$key]}"
     [ -z "$val" ] && continue
-    if [ -z "$ENV_VARS" ]; then
-        ENV_VARS="${key}=${val}"
-    else
-        ENV_VARS="${ENV_VARS},${key}=${val}"
-    fi
+    ENV_VARS="${ENV_VARS},${key}=${val}"
 done
 
 # Secret 映射（SECRET_NAME:版本=環境變數名）
@@ -223,4 +233,5 @@ echo "=========================================="
 echo "  部署完成！"
 echo "  日常排程：每天 11:00 AM (台北時間)"
 echo "  手動觸發：curl -X POST ${FUNCTION_URL}"
+echo "  GCS 資料桶：${GCS_BUCKET}"
 echo "=========================================="

@@ -89,15 +89,15 @@ def analyze_reviews_batch(reviews: list[dict], batch_size: int = 10) -> list[dic
 
             print(f"[AI] 已分析 {min(i + batch_size, len(reviews))}/{len(reviews)} 則評論")
 
+            # Gemini free tier: 15 RPM → 成功時每批次間隔 4 秒
+            if i + batch_size < len(reviews):
+                time.sleep(4)
+
         except Exception as e:
             print(f"[AI] 批次分析失敗：{e}，此批次使用 fallback")
             for r in batch:
                 r.update(_keyword_single(r))
                 analyzed.append(r)
-
-        # Gemini free tier: 15 RPM → 每批次間隔 4 秒
-        if i + batch_size < len(reviews):
-            time.sleep(4)
 
     return analyzed
 

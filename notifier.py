@@ -6,11 +6,14 @@ App 評論監測工具 — 多通道通知模組
 """
 import html as html_module
 import json
+import os
 import smtplib
 import time
 from abc import ABC, abstractmethod
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email import encoders
 
 import config
 
@@ -55,13 +58,13 @@ class NotificationChannel(ABC):
         """檢查此管道是否已正確設定，未設定則跳過重試。"""
         return True
 
-    def send(self, subject: str, body: str) -> bool:
+    def send(self, subject: str, body: str, attachments: list[str] = None) -> bool:
         """帶重試的發送。若未設定則直接跳過。"""
         if not self._is_configured():
             name = type(self).__name__
             print(f"[{name}] 尚未完成設定，跳過通知。")
             return False
-        return _retry_on_failure(self._send_once)(subject, body)
+        return _retry_on_failure(self._send_once)(subject, body, attachments)
 
 
 # ──────────────────────────────────────────────
@@ -87,15 +90,35 @@ class EmailChannel(NotificationChannel):
     def _is_configured(self) -> bool:
         return bool(self.sender and self.password)
 
-    def _send_once(self, subject: str, body: str) -> bool:
-        msg = MIMEMultipart("alternative")
+    def _send_once(self, subject: str, body: str, attachments: list[str] = None) -> bool:
+        msg = MIMEMultipart("mixed")
         msg["From"] = self.sender
         msg["To"] = ", ".join(self.recipients)
         msg["Subject"] = subject
 
-        msg.attach(MIMEText(body, "plain", "utf-8"))
+        # 文字內容
+        text_part = MIMEMultipart("alternative")
+        text_part.attach(MIMEText(body, "plain", "utf-8"))
         html_body = html_module.escape(body).replace("\n", "<br>")
-        msg.attach(MIMEText(f"<html><body>{html_body}</body></html>", "html", "utf-8"))
+        text_part.attach(MIMEText(f"<html><body>{html_body}</body></html>", "html", "utf-8"))
+        msg.attach(text_part)
+
+        # 附件
+        for filepath in (attachments or []):
+            if not os.path.exists(filepath):
+                print(f"[Email] 附件不存在，跳過：{filepath}")
+                continue
+            try:
+                with open(filepath, "rb") as f:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(f.read())
+                encoders.encode_base64(part)
+                filename = os.path.basename(filepath)
+                part.add_header("Content-Disposition", f"attachment; filename={filename}")
+                msg.attach(part)
+                print(f"[Email] 已附加檔案：{filename}")
+            except Exception as e:
+                print(f"[Email] 附件處理失敗（{filepath}）：{e}")
 
         try:
             with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
@@ -121,7 +144,7 @@ class TeamsChannel(NotificationChannel):
     def _is_configured(self) -> bool:
         return bool(self.webhook_url)
 
-    def _send_once(self, subject: str, body: str) -> bool:
+    def _send_once(self, subject: str, body: str, attachments: list[str] = None) -> bool:
         try:
             import requests
         except ImportError:
@@ -211,22 +234,22 @@ class NotificationManager:
         """手動註冊額外的通知管道。"""
         self.channels.append(channel)
 
-    def send_all(self, subject: str, body: str) -> dict[str, bool]:
+    def send_all(self, subject: str, body: str, attachments: list[str] = None) -> dict[str, bool]:
         """向所有已註冊的管道發送通知，回傳各管道的發送結果。"""
         results = {}
         for ch in self.channels:
             name = type(ch).__name__
-            results[name] = ch.send(subject, body)
+            results[name] = ch.send(subject, body, attachments)
         return results
 
 
 # ──────────────────────────────────────────────
 # 便利函式（向後相容 & 快速使用）
 # ──────────────────────────────────────────────
-def send_notification(subject: str, body: str) -> dict[str, bool]:
+def send_notification(subject: str, body: str, attachments: list[str] = None) -> dict[str, bool]:
     """快捷函式：建立 NotificationManager 並發送通知。"""
     manager = NotificationManager()
-    return manager.send_all(subject, body)
+    return manager.send_all(subject, body, attachments)
 
 
 if __name__ == "__main__":

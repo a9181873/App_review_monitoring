@@ -1,0 +1,40 @@
+﻿[
+  {
+    "httpRequest": {
+      "latency": "540.000804701s",
+      "protocol": "HTTP/1.1",
+      "remoteIp": "107.178.198.228",
+      "requestMethod": "POST",
+      "requestSize": "484",
+      "requestUrl": "https://app-review-monitor-vfaw3lxbqa-de.a.run.app/",
+      "responseSize": "72",
+      "serverIp": "34.143.72.2",
+      "status": 504,
+      "userAgent": "Google-Cloud-Scheduler"
+    },
+    "insertId": "69cb3ace000e39c6952b4f87",
+    "labels": {
+      "goog-drz-cloudfunctions-id": "app-review-monitor",
+      "goog-drz-cloudfunctions-location": "asia-east1",
+      "goog-managed-by": "cloudfunctions",
+      "instanceId": "008c15ff0813c269e2c1dd0d67066af71f7204ebcb0763c5d7697630ec6491cb54e86264efbda84a4ab8dbbd05eedb8cc90ed4b25dcb65d162a856d7ff1055c561503d27096ffce89c0a1c"
+    },
+    "logName": "projects/project-45f9a5d1-4ff8-4dae-b47/logs/run.googleapis.com%2Frequests",
+    "receiveTimestamp": "2026-03-31T03:09:02.935838926Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "app-review-monitor",
+        "location": "asia-east1",
+        "project_id": "project-45f9a5d1-4ff8-4dae-b47",
+        "revision_name": "app-review-monitor-00007-puz",
+        "service_name": "app-review-monitor"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "ERROR",
+    "spanId": "09f24a2083a15b80",
+    "timestamp": "2026-03-31T03:00:02.696605Z",
+    "trace": "projects/project-45f9a5d1-4ff8-4dae-b47/traces/0f214a9e507c28829b6023aabd095755",
+    "traceSampled": true
+  }
+]
