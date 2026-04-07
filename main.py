@@ -115,8 +115,6 @@ def main(backfill: bool = None) -> int:
     notify_results = {}
     if backfill:
         print("[回溯模式] 跳過通知發送（歷史評論不通知）")
-    elif not recent_reviews:
-        print("無近期新評論，跳過通知發送")
     else:
         notify_results = send_notification(
             subject, summary,

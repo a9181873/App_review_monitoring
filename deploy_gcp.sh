@@ -118,8 +118,8 @@ echo "  ✓ 服務帳號 ${SA_EMAIL} 已授權"
 # ── 組裝部署參數 ────────────────────────────────
 # 非敏感環境變數
 ENV_VARS=""
-# 加入 GCS Bucket 名稱
-ENV_VARS="GCS_BUCKET_NAME=${GCS_BUCKET},GCP_PROJECT_ID=${PROJECT_ID}"
+# 加入 GCS Bucket 名稱與時區
+ENV_VARS="GCS_BUCKET_NAME=${GCS_BUCKET},GCP_PROJECT_ID=${PROJECT_ID},TZ=${TIMEZONE}"
 for key in "${PLAIN_KEYS[@]}"; do
     val="${ENV_MAP[$key]}"
     [ -z "$val" ] && continue
