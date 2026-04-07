@@ -95,7 +95,8 @@ def main(backfill: bool = None) -> int:
         for r in reviews:
             try:
                 rd = datetime.strptime(r["date"], "%Y-%m-%d %H:%M:%S")
-            except (ValueError, KeyError):
+            except (ValueError, KeyError) as e:
+                print(f"⚠ 評論日期解析失敗，跳過通知篩選：{r.get('review_id', '?')} - {e}")
                 continue
             if rd >= yesterday:
                 recent_reviews.append(r)

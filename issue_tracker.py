@@ -132,7 +132,12 @@ def detect_issues(period_days: int = 7) -> list[dict]:
     偵測近 N 天的關鍵議題。
     優先用 AI，fallback 到關鍵字。
     """
-    excel_path = os.path.join(config.REPORTS_DIR, "App評論監測_資料庫.xlsx")
+    from storage import sync_down
+
+    excel_filename = "App評論監測_資料庫.xlsx"
+    excel_path = os.path.join(config.REPORTS_DIR, excel_filename)
+    # GCP 環境須先從 GCS 下載 Excel 資料庫
+    sync_down(excel_filename, config.REPORTS_DIR)
     if not os.path.exists(excel_path):
         print("[議題追蹤] Excel 資料庫不存在，無法分析")
         return []

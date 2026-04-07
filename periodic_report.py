@@ -125,7 +125,12 @@ def generate_periodic_report(period: str = "week") -> tuple[str, str, str]:
     :param period: 'week' 或 'month'
     :return: (report_text, subject, report_path)
     """
-    excel_path = os.path.join(config.REPORTS_DIR, "App評論監測_資料庫.xlsx")
+    from storage import sync_down
+
+    excel_filename = "App評論監測_資料庫.xlsx"
+    excel_path = os.path.join(config.REPORTS_DIR, excel_filename)
+    # GCP 環境須先從 GCS 下載 Excel 資料庫
+    sync_down(excel_filename, config.REPORTS_DIR)
     df = _load_reviews(excel_path)
     filtered, label, date_range = _filter_by_period(df, period)
 

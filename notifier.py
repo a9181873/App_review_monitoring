@@ -50,7 +50,7 @@ class NotificationChannel(ABC):
     """所有通知管道的基底類別。"""
 
     @abstractmethod
-    def _send_once(self, subject: str, body: str) -> bool:
+    def _send_once(self, subject: str, body: str, attachments: list[str] = None) -> bool:
         """單次發送嘗試。"""
         ...
 

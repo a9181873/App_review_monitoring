@@ -20,7 +20,7 @@ def append_to_excel(reviews: list[dict], excel_path: str):
     if os.path.exists(excel_path):
         df_old = pd.read_excel(excel_path)
         df_combined = pd.concat([df_old, df_new], ignore_index=True)
-        df_combined = df_combined.drop_duplicates(subset=["review_id"], keep="last")
+        df_combined = df_combined.drop_duplicates(subset=["review_id"], keep="first")
     else:
         os.makedirs(os.path.dirname(excel_path), exist_ok=True)
         df_combined = df_new
