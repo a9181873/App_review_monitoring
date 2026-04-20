@@ -150,7 +150,7 @@ DEPLOY_ARGS=(
     --timeout="${TIMEOUT}"
     --entry-point=cloud_function_handler
     --trigger-http
-    --allow-unauthenticated
+    --no-allow-unauthenticated
     --source=.
     --quiet
 )
@@ -166,6 +166,13 @@ FUNCTION_URL=$(gcloud functions describe "${FUNCTION_NAME}" \
     --format="value(serviceConfig.uri)")
 
 echo "  Function URL: ${FUNCTION_URL}"
+
+# ── 授予服務帳號呼叫權限 ───────────────────────
+gcloud run services add-iam-policy-binding "${FUNCTION_NAME}" \
+    --region="${REGION}" \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="roles/run.invoker" \
+    --quiet
 
 # ── 設定 Cloud Scheduler ──────────────────────
 echo ""
@@ -183,6 +190,8 @@ gcloud scheduler jobs create http "${SCHEDULER_JOB}" \
     --http-method=POST \
     --headers="Content-Type=application/json" \
     --message-body='{"mode": "incremental"}' \
+    --oidc-service-account-email="${SA_EMAIL}" \
+    --oidc-token-audience="${FUNCTION_URL}" \
     --attempt-deadline="${TIMEOUT}" \
     --quiet
 
@@ -201,7 +210,7 @@ if [ "$1" == "--with-backfill" ]; then
         --timeout="${TIMEOUT}"
         --entry-point=cloud_function_backfill_handler
         --trigger-http
-        --allow-unauthenticated
+        --no-allow-unauthenticated
         --source=.
         --quiet
     )
