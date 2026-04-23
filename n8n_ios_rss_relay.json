@@ -1,0 +1,77 @@
+{
+  "name": "iOS RSS Relay",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "ios-rss",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "e005086d-67ff-43f1-b9da-00d0f507b34b",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "1b081373-3e19-4b68-b7a4-0466266eeff9"
+    },
+    {
+      "parameters": {
+        "url": "=https://itunes.apple.com/{{ $json.query.country }}/rss/customerreviews/page={{ $json.query.page }}/id={{ $json.query.app_id }}/sortby=mostrecent/json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "a90ab94b-ef3f-4277-bcad-fabb4092bdee",
+      "name": "HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        420,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "f7ab0a72-fbbb-4ba2-bf01-38290e29b1d3",
+  "meta": {
+    "instanceId": "cb315c10fa8c5ff9245be7eeb09b8c0897f25906faece16ec0540d5e5b565a50"
+  },
+  "tags": []
+}

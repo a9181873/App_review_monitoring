@@ -31,10 +31,10 @@ TIMEOUT="540s"                # 9 分鐘（Cloud Functions 最大 540s）
 GCS_BUCKET="${PROJECT_ID}-app-review-data"  # GCS Bucket for 持久化
 
 # ── 敏感變數名稱（存入 Secret Manager）─────────
-SECRET_KEYS=("EMAIL_PASSWORD" "GEMINI_API_KEY" "TEAMS_WEBHOOK_URL" "EMAIL_SENDER")
+SECRET_KEYS=("EMAIL_PASSWORD" "GEMINI_API_KEY" "TEAMS_WEBHOOK_URL" "EMAIL_SENDER" "IOS_RSS_RELAY_KEY")
 
 # ── 非敏感變數（一般環境變數）────────────────────
-PLAIN_KEYS=("EMAIL_SMTP_SERVER" "EMAIL_SMTP_PORT" "EMAIL_RECIPIENTS")
+PLAIN_KEYS=("EMAIL_SMTP_SERVER" "EMAIL_SMTP_PORT" "EMAIL_RECIPIENTS" "IOS_RSS_RELAY_URL")
 
 # ── 從 .env 讀取所有變數到 associative array ───
 declare -A ENV_MAP

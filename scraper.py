@@ -6,6 +6,8 @@ App 評論監測工具 — 評論抓取模組
 2026-04 更新：
   - iOS：改用自家實作直呼 iTunes RSS（帶 Mozilla UA），繞過 app-store-web-scraper
     0.2.0 的 UA 封鎖問題（Apple 會回空 feed）。
+  - iOS：新增 n8n 中繼 Proxy 模式，繞過 GCP IP 被 Apple 封鎖的問題。
+    設定 IOS_RSS_RELAY_URL / IOS_RSS_RELAY_KEY 環境變數即可啟用。
   - Android：改用 continuation_token 迴圈分頁，遇到已見 ID 連續出現就停，
     避免單次 count=200 漏掉爆量新評論。
 """
@@ -20,6 +22,11 @@ from google_play_scraper import Sort, reviews
 
 import config
 from storage import sync_down, sync_up
+
+# iOS RSS 中繼 Proxy（用於 GCP 環境繞過 Apple IP 封鎖）
+# 設定為 n8n webhook URL，例如 https://n8n.dky.tw/webhook/ios-rss
+IOS_RSS_RELAY_URL = os.getenv("IOS_RSS_RELAY_URL", "")
+IOS_RSS_RELAY_KEY = os.getenv("IOS_RSS_RELAY_KEY", "")
 
 
 _IOS_UAS = [
@@ -71,8 +78,26 @@ def _save_seen_ids(filepath: str, seen_ids: set):
 # ──────────────────────────────────────────────
 # iOS：直呼 iTunes RSS（自家實作，繞過套件 UA 封鎖）
 # ──────────────────────────────────────────────
-def _fetch_ios_page(country: str, app_id: str, page: int) -> dict:
-    """抓單頁 iOS RSS。每個 UA 最多試 1 次，直到拿到 entries 或跑完 UA 列表。"""
+def _fetch_ios_page_via_relay(country: str, app_id: str, page: int) -> dict:
+    """透過 n8n 中繼 Proxy 抓 iOS RSS（繞過 GCP IP 封鎖）。"""
+    sep = "&" if "?" in IOS_RSS_RELAY_URL else "?"
+    relay_url = (
+        f"{IOS_RSS_RELAY_URL}{sep}"
+        f"country={country}&app_id={app_id}&page={page}"
+    )
+    headers = {
+        "Accept": "application/json",
+    }
+    if IOS_RSS_RELAY_KEY:
+        headers["X-API-Key"] = IOS_RSS_RELAY_KEY
+
+    req = urllib.request.Request(relay_url, headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _fetch_ios_page_direct(country: str, app_id: str, page: int) -> dict:
+    """直接抓 iTunes RSS（本地開發用）。每個 UA 最多試 1 次。"""
     url = (
         f"https://itunes.apple.com/{country}/rss/customerreviews/"
         f"page={page}/id={app_id}/sortby=mostrecent/json"
@@ -107,6 +132,27 @@ def _fetch_ios_page(country: str, app_id: str, page: int) -> dict:
     if last_data is not None:
         return last_data  # 可能真的沒 entry（該頁無評論）
     raise RuntimeError(f"iOS RSS page {page} 所有 UA 皆失敗：{last_err}")
+
+
+def _fetch_ios_page(country: str, app_id: str, page: int) -> dict:
+    """
+    抓單頁 iOS RSS。
+    GCP 環境：優先透過 n8n 中繼 Proxy，失敗時降級為直連。
+    本地環境：直接呼叫 iTunes RSS。
+    """
+    if IOS_RSS_RELAY_URL:
+        try:
+            data = _fetch_ios_page_via_relay(country, app_id, page)
+            feed = data.get("feed", {}) or {}
+            if feed.get("entry"):
+                if page == 1:
+                    print(f"[iOS] 中繼 Proxy 連線成功")
+                return data
+            # 中繼拿到空 feed，降級直連
+            print(f"[iOS] 中繼回傳空 feed（page {page}），嘗試直連...")
+        except Exception as e:
+            print(f"[iOS] 中繼 Proxy 失敗：{e}，降級直連...")
+    return _fetch_ios_page_direct(country, app_id, page)
 
 
 def _parse_ios_entry(entry: dict) -> dict | None:
@@ -216,6 +262,9 @@ def get_ios_reviews(
 
     print(f"[iOS] {app_name}：RSS 取得 {total_fetched} 則，抓到 "
           f"{len(new_reviews)} 則{'歷史' if backfill else '新'}評論")
+
+    if total_fetched == 0:
+        print(f"[iOS] ⚠️ {app_name}：RSS 回傳 0 則評論，可能被 Apple 封鎖！")
 
     _save_seen_ids(seen_ids_file, seen_ids | current_ids)
     return new_reviews

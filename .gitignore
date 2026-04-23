@@ -16,3 +16,7 @@ reports/
 # OS
 .DS_Store
 Thumbs.db
+
+# 封存的除錯/歷史檔案
+_archive/
+.claude/

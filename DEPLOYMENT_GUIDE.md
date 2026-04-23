@@ -10,27 +10,32 @@
 graph LR
     subgraph GCP["Google Cloud Platform"]
         Scheduler["Cloud Scheduler<br/>每日 11:00 觸發"]
-        CF["Cloud Functions Gen2<br/>app-review-monitor<br/>Python 3.12 / 512MB / 540s"]
-        GCS["GCS Bucket<br/>Excel 資料庫<br/>seen_ids.json"]
+        CF["Cloud Functions Gen2<br/>app-review-monitor"]
+        GCS["GCS Bucket<br/>Excel 資料庫"]
         Secrets["Secret Manager<br/>API Key / 密碼"]
     end
 
+    subgraph Oracle["Oracle Cloud (中繼)"]
+        n8n["n8n Webhook<br/>RSS Relay"]
+    end
+
     subgraph External["外部服務"]
-        AppStore["App Store<br/>網頁爬蟲"]
+        AppStore["App Store<br/>RSS Feed"]
         PlayStore["Google Play Store"]
-        GeminiAPI["Gemini 2.5 Flash API"]
-        SMTP["Gmail SMTP<br/>含 Excel 附件"]
+        GeminiAPI["Gemini AI"]
+        SMTP["Gmail SMTP"]
         TeamsWH["Teams Webhook"]
     end
 
     Scheduler -->|HTTP POST| CF
     Secrets -.-> CF
     CF <-->|持久化資料| GCS
-    CF -->|抓取 iOS 評論| AppStore
+    CF -->|請求 iOS 評論| n8n
+    n8n -->|抓取內容| AppStore
     CF -->|抓取 Android 評論| PlayStore
     CF -->|AI 語意分析| GeminiAPI
-    CF -->|Email 通知 + Excel 附件| SMTP
-    CF -->|Teams 通知| TeamsWH
+    CF -->|通知| SMTP
+    CF -->|通知| TeamsWH
 ```
 
 ---
@@ -59,7 +64,17 @@ gcloud services enable \
 
 ---
 
-## 2. 部署 Cloud Function
+## 2. iOS 中繼設定 (自建 Proxy)
+由於 Apple 封鎖了 GCP 的 IP 網段，雲端部署**必須**配合中繼 Proxy 才能抓取 iOS 評論。
+
+### 2.1 在 n8n 匯入工作流
+1. 使用本專案提供的 `n8n_ios_rss_relay.json` 檔案。
+2. 匯入至你的 n8n 並設定 Webhook 密鑰 (X-API-Key)。
+3. 啟動 (Active) 該工作流。
+
+---
+
+## 3. 部署 Cloud Function
 
 ### 方法 A：使用部署腳本（推薦）
 修改 `deploy_gcp.sh` 中的環境變數後執行：

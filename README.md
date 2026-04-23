@@ -10,7 +10,7 @@
 ## 核心特色 (Features)
 
 *   **雙平台支援**：同時監控 iOS (App Store) 與 Android (Google Play) 評論。
-*   **穩定的 iOS 爬蟲**：採用 `app-store-web-scraper` 套件抓取 App Store 評論。
+*   **穩定的 iOS 爬蟲**：支援直連 iTunes RSS 或透過 n8n 中繼 Proxy (Relay) 抓取，解決雲端 IP (如 GCP) 被 Apple 封鎖的問題。
 *   **AI 語意分析**：整合 Google Gemini 2.5 Flash（免費方案），自動分類評論為「程式錯誤 / 功能建議 / UX體驗 / 帳號問題 / 效能問題」等類別，並標記情緒與優先度。API 不可用時自動 fallback 至關鍵字分類。
 *   **智慧通知**：僅通知今天/昨天的新評論，舊評論靜默存入資料庫，不灌爆通知。
 *   **增量抓取防呆機制**：透過 `data/` 目錄保存 `seen_ids.json`，確保每次執行只處理「全新的客訴」，過濾雜訊。
@@ -30,7 +30,7 @@
 
 *   **語言**: Python 3.10+
 *   **Android 爬取**: `google-play-scraper`
-*   **iOS 爬取**: `app-store-web-scraper`
+*   **iOS 爬取**: 自家實作 iTunes RSS + n8n 中繼 Proxy (支援本機直連/雲端中繼)
 *   **AI 分析**: `google-generativeai` (Gemini 2.5 Flash 免費方案)
 *   **資料處理**: `pandas`, `openpyxl`
 *   **雲端儲存**: `google-cloud-storage` (GCS 持久化)
@@ -60,6 +60,8 @@ cp .env.example .env
 | `EMAIL_RECIPIENTS` | 收件人，逗號分隔 |
 | `TEAMS_WEBHOOK_URL` | Teams Incoming Webhook URL |
 | `GEMINI_API_KEY` | 從 [Google AI Studio](https://aistudio.google.com/apikey) 取得（免費） |
+| `IOS_RSS_RELAY_URL` | (選填) n8n 中繼 Webhook URL，雲端環境必填 |
+| `IOS_RSS_RELAY_KEY` | (選填) n8n 中繼 API Key |
 
 ### 3. 本機執行
 ```bash

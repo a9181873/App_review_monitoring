@@ -14,4 +14,7 @@
 .gitignore
 
 node_modules
+_archive/
+tools/
+.claude/
 #!include:.gitignore
