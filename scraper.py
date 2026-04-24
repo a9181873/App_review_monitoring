@@ -4,29 +4,25 @@ App 評論監測工具 — 評論抓取模組
 支援回溯模式（--backfill）抓取近一年歷史評論。
 
 2026-04 更新：
-  - iOS：改用自家實作直呼 iTunes RSS（帶 Mozilla UA），繞過 app-store-web-scraper
-    0.2.0 的 UA 封鎖問題（Apple 會回空 feed）。
-  - iOS：新增 n8n 中繼 Proxy 模式，繞過 GCP IP 被 Apple 封鎖的問題。
-    設定 IOS_RSS_RELAY_URL / IOS_RSS_RELAY_KEY 環境變數即可啟用。
+  - iOS：優先走 App Store Connect API（JWT 認證，即時資料），失敗時降級到
+    iTunes RSS。ASC 路徑會自動過濾「開發者已回復」的評論以免重複通知。
+  - iOS RSS（降級路徑）：自家實作直呼 iTunes RSS 並輪替瀏覽器 UA，繞過套件
+    0.2.0 的 UA 封鎖問題。注意 RSS 本身有 24–72 小時 CDN 快取延遲。
   - Android：改用 continuation_token 迴圈分頁，遇到已見 ID 連續出現就停，
     避免單次 count=200 漏掉爆量新評論。
 """
 import json
 import os
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from google_play_scraper import Sort, reviews
 
 import config
+import ios_asc
 from storage import sync_down, sync_up
-
-# iOS RSS 中繼 Proxy（用於 GCP 環境繞過 Apple IP 封鎖）
-# 設定為 n8n webhook URL，例如 https://n8n.dky.tw/webhook/ios-rss
-IOS_RSS_RELAY_URL = os.getenv("IOS_RSS_RELAY_URL", "")
-IOS_RSS_RELAY_KEY = os.getenv("IOS_RSS_RELAY_KEY", "")
 
 
 _IOS_UAS = [
@@ -41,7 +37,7 @@ _IOS_RSS_PAGE_LIMIT = 10   # Apple RSS 最多 10 頁
 _IOS_PER_PAGE = 50         # 每頁 50 則
 _ANDROID_PAGE_SIZE = 200   # Google Play 單頁上限
 _ANDROID_MAX_PAGES = 20    # 增量模式最多分頁 20 次（= 4000 則）保險上限
-_ANDROID_STOP_AFTER_SEEN = 50  # 連續遇到 50 則已見 ID 就停（確定已覆蓋所有新評論）
+_ANDROID_STOP_AFTER_SEEN = 50  # 連續遇到 50 則已見 ID 才停
 
 
 def _backfill_since() -> datetime:
@@ -76,28 +72,82 @@ def _save_seen_ids(filepath: str, seen_ids: set):
 
 
 # ──────────────────────────────────────────────
-# iOS：直呼 iTunes RSS（自家實作，繞過套件 UA 封鎖）
+# iOS (ASC API) 主路徑
 # ──────────────────────────────────────────────
-def _fetch_ios_page_via_relay(country: str, app_id: str, page: int) -> dict:
-    """透過 n8n 中繼 Proxy 抓 iOS RSS（繞過 GCP IP 封鎖）。"""
-    sep = "&" if "?" in IOS_RSS_RELAY_URL else "?"
-    relay_url = (
-        f"{IOS_RSS_RELAY_URL}{sep}"
-        f"country={country}&app_id={app_id}&page={page}"
+def _get_ios_reviews_via_asc(
+    app_name: str, app_id: str, backfill: bool,
+) -> list[dict]:
+    """
+    透過 App Store Connect API 抓取 iOS 評論。
+    過濾掉「開發者已回復」的評論，避免重複通知。
+    """
+    max_reviews = 1000 if backfill else 400
+    raw = ios_asc.fetch_reviews(app_id, max_reviews=max_reviews)
+
+    # ASC review_id 格式與 RSS 不同（UUID vs 數字），用獨立檔案避免誤判
+    seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_ios_asc_seen_ids.json")
+    seen_ids, is_fresh = _load_seen_ids(seen_ids_file)
+
+    if backfill:
+        min_date = _backfill_since()
+    elif is_fresh:
+        min_date = datetime.now() - timedelta(days=2)
+        print(f"[iOS/ASC] {app_name}：首次執行，僅抓取近 2 天評論（增量保護）")
+    else:
+        min_date = None
+
+    new_reviews: list[dict] = []
+    current_ids: set[str] = set()
+    skipped_replied = 0
+
+    for item in raw:
+        review_id = item["review_id"]
+        current_ids.add(review_id)
+
+        if not backfill and review_id in seen_ids:
+            continue
+
+        date_obj = item["date_obj"]
+        if min_date and date_obj and date_obj < min_date:
+            continue
+
+        # 已回復的評論不納入通知（標記為已見，之後不再處理）
+        if item.get("has_response"):
+            skipped_replied += 1
+            continue
+
+        formatted_date = (
+            date_obj.strftime("%Y-%m-%d %H:%M:%S") if date_obj else ""
+        )
+        text = item["content"] or ""
+        if item.get("title"):
+            text = f"{item['title']}\n{text}".strip()
+
+        new_reviews.append({
+            "platform": "iOS",
+            "app_name": app_name,
+            "user_name": item["user_name"],
+            "rating": item["rating"],
+            "review_text": text,
+            "date": formatted_date,
+            "review_id": review_id,
+        })
+
+    print(
+        f"[iOS/ASC] {app_name}：ASC 取得 {len(raw)} 則，"
+        f"抓到 {len(new_reviews)} 則{'歷史' if backfill else '新'}評論"
+        + (f"（略過 {skipped_replied} 則已回復）" if skipped_replied else "")
     )
-    headers = {
-        "Accept": "application/json",
-    }
-    if IOS_RSS_RELAY_KEY:
-        headers["X-API-Key"] = IOS_RSS_RELAY_KEY
 
-    req = urllib.request.Request(relay_url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    _save_seen_ids(seen_ids_file, seen_ids | current_ids)
+    return new_reviews
 
 
-def _fetch_ios_page_direct(country: str, app_id: str, page: int) -> dict:
-    """直接抓 iTunes RSS（本地開發用）。每個 UA 最多試 1 次。"""
+# ──────────────────────────────────────────────
+# iOS (iTunes RSS) 降級路徑
+# ──────────────────────────────────────────────
+def _fetch_ios_rss_page(country: str, app_id: str, page: int) -> dict:
+    """抓單頁 iTunes RSS。每個 UA 最多試 1 次。"""
     url = (
         f"https://itunes.apple.com/{country}/rss/customerreviews/"
         f"page={page}/id={app_id}/sortby=mostrecent/json"
@@ -118,44 +168,23 @@ def _fetch_ios_page_direct(country: str, app_id: str, page: int) -> dict:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             last_data = data
-            # feed 存在且有 entry 才算成功；若空 feed 代表被擋，換 UA
             feed = data.get("feed", {}) or {}
             if feed.get("entry"):
                 return data
             if idx < len(_IOS_UAS) - 1:
                 time.sleep(1 + idx)
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as e:
+        except (urllib.error.URLError, urllib.error.HTTPError,
+                TimeoutError, json.JSONDecodeError) as e:
             last_err = e
             if idx < len(_IOS_UAS) - 1:
                 time.sleep(2 ** idx)
 
     if last_data is not None:
-        return last_data  # 可能真的沒 entry（該頁無評論）
+        return last_data
     raise RuntimeError(f"iOS RSS page {page} 所有 UA 皆失敗：{last_err}")
 
 
-def _fetch_ios_page(country: str, app_id: str, page: int) -> dict:
-    """
-    抓單頁 iOS RSS。
-    GCP 環境：優先透過 n8n 中繼 Proxy，失敗時降級為直連。
-    本地環境：直接呼叫 iTunes RSS。
-    """
-    if IOS_RSS_RELAY_URL:
-        try:
-            data = _fetch_ios_page_via_relay(country, app_id, page)
-            feed = data.get("feed", {}) or {}
-            if feed.get("entry"):
-                if page == 1:
-                    print(f"[iOS] 中繼 Proxy 連線成功")
-                return data
-            # 中繼拿到空 feed，降級直連
-            print(f"[iOS] 中繼回傳空 feed（page {page}），嘗試直連...")
-        except Exception as e:
-            print(f"[iOS] 中繼 Proxy 失敗：{e}，降級直連...")
-    return _fetch_ios_page_direct(country, app_id, page)
-
-
-def _parse_ios_entry(entry: dict) -> dict | None:
+def _parse_ios_rss_entry(entry: dict) -> dict | None:
     try:
         review_id = str(entry["id"]["label"])
         date_str = entry["updated"]["label"]
@@ -175,40 +204,34 @@ def _parse_ios_entry(entry: dict) -> dict | None:
             "rating": int(entry["im:rating"]["label"]),
         }
     except (KeyError, ValueError, TypeError) as e:
-        print(f"[iOS] 解析評論條目失敗，略過：{e}")
+        print(f"[iOS/RSS] 解析評論條目失敗，略過：{e}")
         return None
 
 
-def get_ios_reviews(
-    app_name: str, app_id: str, country: str = None, backfill: bool = False
+def _get_ios_reviews_via_rss(
+    app_name: str, app_id: str, country: str, backfill: bool,
 ) -> list[dict]:
-    """抓取 iOS App Store 新評論（自家 RSS 實作）。"""
-    country = (country or config.IOS_COUNTRY).lower()
-    print(f"[iOS] 正在抓取 {app_name} 的評論{'（回溯模式）' if backfill else ''} ...")
-
+    """iTunes RSS 降級抓取（ASC 未設定或失敗時使用）。"""
     seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_ios_seen_ids.json")
     seen_ids, is_fresh = _load_seen_ids(seen_ids_file)
 
     if backfill:
         min_date = _backfill_since()
-        max_pages = _IOS_RSS_PAGE_LIMIT
     elif is_fresh:
         min_date = datetime.now() - timedelta(days=2)
-        max_pages = _IOS_RSS_PAGE_LIMIT
-        print(f"[iOS] {app_name}：首次執行，僅抓取近 2 天評論（增量保護）")
+        print(f"[iOS/RSS] {app_name}：首次執行，僅抓取近 2 天評論（增量保護）")
     else:
         min_date = None
-        max_pages = _IOS_RSS_PAGE_LIMIT
 
     new_reviews: list[dict] = []
     current_ids: set[str] = set()
     total_fetched = 0
 
-    for page in range(1, max_pages + 1):
+    for page in range(1, _IOS_RSS_PAGE_LIMIT + 1):
         try:
-            data = _fetch_ios_page(country, app_id, page)
+            data = _fetch_ios_rss_page(country, app_id, page)
         except Exception as e:
-            print(f"[iOS] {app_name} page {page} 失敗：{e}")
+            print(f"[iOS/RSS] {app_name} page {page} 失敗：{e}")
             break
 
         feed = data.get("feed", {}) or {}
@@ -223,7 +246,7 @@ def get_ios_reviews(
         stop_by_date = False
 
         for entry in entries:
-            parsed = _parse_ios_entry(entry)
+            parsed = _parse_ios_rss_entry(entry)
             if not parsed:
                 continue
             review_id = parsed["review_id"]
@@ -234,25 +257,27 @@ def get_ios_reviews(
             page_all_seen = False
 
             date_obj = parsed["date_obj"]
-            formatted_date = (
-                date_obj.strftime("%Y-%m-%d %H:%M:%S") if date_obj else ""
-            )
-
             if min_date and date_obj and date_obj < min_date:
                 stop_by_date = True
                 continue
+
+            formatted_date = (
+                date_obj.strftime("%Y-%m-%d %H:%M:%S") if date_obj else ""
+            )
+            text = parsed["content"] or ""
+            if parsed["title"]:
+                text = f"{parsed['title']}\n{text}".strip()
 
             new_reviews.append({
                 "platform": "iOS",
                 "app_name": app_name,
                 "user_name": parsed["user_name"],
                 "rating": parsed["rating"],
-                "review_text": parsed["content"],
+                "review_text": text,
                 "date": formatted_date,
                 "review_id": review_id,
             })
 
-        # 增量模式：若本頁全是已見 ID，再往後翻也只會更舊，停止
         if not backfill and page_all_seen and seen_ids:
             break
         if stop_by_date and not backfill:
@@ -260,14 +285,35 @@ def get_ios_reviews(
 
         time.sleep(0.3)
 
-    print(f"[iOS] {app_name}：RSS 取得 {total_fetched} 則，抓到 "
+    print(f"[iOS/RSS] {app_name}：RSS 取得 {total_fetched} 則，抓到 "
           f"{len(new_reviews)} 則{'歷史' if backfill else '新'}評論")
 
     if total_fetched == 0:
-        print(f"[iOS] ⚠️ {app_name}：RSS 回傳 0 則評論，可能被 Apple 封鎖！")
+        print(f"[iOS/RSS] ⚠️ {app_name}：RSS 回傳 0 則評論，可能被 Apple 封鎖！")
 
     _save_seen_ids(seen_ids_file, seen_ids | current_ids)
     return new_reviews
+
+
+def get_ios_reviews(
+    app_name: str, app_id: str, country: str = None, backfill: bool = False,
+) -> list[dict]:
+    """
+    抓取 iOS 評論。優先走 ASC API，未設定或失敗時降級到 iTunes RSS。
+    ASC 路徑會自動過濾已回復的評論。
+    """
+    country = (country or config.IOS_COUNTRY).lower()
+    print(f"[iOS] 正在抓取 {app_name} 的評論{'（回溯模式）' if backfill else ''} ...")
+
+    if ios_asc.is_configured():
+        try:
+            return _get_ios_reviews_via_asc(app_name, app_id, backfill)
+        except Exception as e:
+            print(f"[iOS/ASC] {app_name} 失敗，降級至 RSS：{e}")
+    else:
+        print(f"[iOS] ASC API 未設定，使用 RSS（注意：RSS 有 24–72 小時延遲）")
+
+    return _get_ios_reviews_via_rss(app_name, app_id, country, backfill)
 
 
 # ──────────────────────────────────────────────
@@ -330,7 +376,6 @@ def get_android_reviews(
         total_fetched += len(result)
 
         stop_by_date = False
-        page_consecutive_seen = 0
 
         for r in result:
             review_id = r["reviewId"]
@@ -338,7 +383,6 @@ def get_android_reviews(
 
             if not backfill and review_id in seen_ids:
                 consecutive_seen += 1
-                page_consecutive_seen += 1
                 continue
             consecutive_seen = 0
 

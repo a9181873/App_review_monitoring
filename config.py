@@ -52,6 +52,17 @@ IOS_REVIEW_COUNT = 50
 IOS_COUNTRY = "tw"
 
 # ──────────────────────────────────────────────
+# App Store Connect API（iOS 主路徑，即時資料）
+# 取得方式：App Store Connect → Users and Access → Integrations → Keys
+# 需要 Admin 或 App Manager 權限建立 .p8 私鑰。
+# 未設定時程式會自動降級到 iTunes RSS（24–72 小時延遲）。
+# ──────────────────────────────────────────────
+ASC_KEY_ID = os.getenv("ASC_KEY_ID", "")
+ASC_ISSUER_ID = os.getenv("ASC_ISSUER_ID", "")
+ASC_PRIVATE_KEY_PATH = os.getenv("ASC_PRIVATE_KEY_PATH", "")  # 本機 .p8 檔路徑
+ASC_PRIVATE_KEY = os.getenv("ASC_PRIVATE_KEY", "")            # 雲端直接塞 PEM 內容
+
+# ──────────────────────────────────────────────
 # AI 語意分析設定 (Google Gemini Free Tier)
 # ──────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
