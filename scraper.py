@@ -11,6 +11,7 @@ App 評論監測工具 — 評論抓取模組
   - Android：改用 continuation_token 迴圈分頁，遇到已見 ID 連續出現就停，
     避免單次 count=200 漏掉爆量新評論。
 """
+import hashlib
 import json
 import os
 import time
@@ -46,29 +47,66 @@ def _backfill_since() -> datetime:
 
 
 # ──────────────────────────────────────────────
-# 已見 ID 管理
+# 已見評論狀態管理（改用 {id: fingerprint} 偵測編輯）
 # ──────────────────────────────────────────────
-def _load_seen_ids(filepath: str) -> tuple[set, bool]:
-    """從 JSON 檔案載入已見評論 ID 集合。回傳 (seen_ids, is_fresh)。"""
+def _review_fingerprint(content: str, rating: int) -> str:
+    """以內容+星數的 SHA1 前 16 碼當作評論指紋；變更即視為編輯。"""
+    raw = f"{content or ''}|{rating}".encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:16]
+
+
+def _load_seen_ids(filepath: str) -> tuple[dict, bool]:
+    """
+    載入已見評論狀態。回傳 (seen_dict, is_fresh)。
+    seen_dict: {review_id: fingerprint_or_None}
+    向下相容：舊版檔案是字串 list，會轉成 {id: None}（首次執行不會誤判編輯）。
+    """
     filename = os.path.basename(filepath)
     sync_down(filename)
 
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            ids = set(json.load(f))
-            return ids, False
-    return set(), True
+    if not os.path.exists(filepath):
+        return {}, True
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if isinstance(data, list):
+        # 舊格式：list of review_id
+        return {rid: None for rid in data}, False
+    if isinstance(data, dict):
+        return data, False
+    return {}, True
 
 
-def _save_seen_ids(filepath: str, seen_ids: set):
+def _save_seen_ids(filepath: str, seen_dict: dict):
     parent = os.path.dirname(filepath)
     if parent:
         os.makedirs(parent, exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(list(seen_ids), f, ensure_ascii=False)
+        json.dump(seen_dict, f, ensure_ascii=False)
 
     filename = os.path.basename(filepath)
     sync_up(filename)
+
+
+def _classify_review(
+    review_id: str, fingerprint: str, seen_dict: dict,
+) -> str:
+    """
+    依 seen_dict 判斷評論狀態：
+      "new"     — 從未見過
+      "edited"  — 看過但內容/星數變了（編輯）
+      "seen"    — 看過且未變
+      "legacy"  — 看過但舊檔沒指紋資料（無法判斷，視為已見不通知）
+    """
+    if review_id not in seen_dict:
+        return "new"
+    prior = seen_dict[review_id]
+    if prior is None:
+        return "legacy"
+    if prior == fingerprint:
+        return "seen"
+    return "edited"
 
 
 # ──────────────────────────────────────────────
@@ -86,7 +124,7 @@ def _get_ios_reviews_via_asc(
 
     # ASC review_id 格式與 RSS 不同（UUID vs 數字），用獨立檔案避免誤判
     seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_ios_asc_seen_ids.json")
-    seen_ids, is_fresh = _load_seen_ids(seen_ids_file)
+    seen_dict, is_fresh = _load_seen_ids(seen_ids_file)
 
     if backfill:
         min_date = _backfill_since()
@@ -97,14 +135,22 @@ def _get_ios_reviews_via_asc(
         min_date = None
 
     new_reviews: list[dict] = []
-    current_ids: set[str] = set()
+    updated_dict: dict = dict(seen_dict)
     skipped_replied = 0
+    edited_count = 0
 
     for item in raw:
         review_id = item["review_id"]
-        current_ids.add(review_id)
+        text = item["content"] or ""
+        if item.get("title"):
+            text = f"{item['title']}\n{text}".strip()
+        rating = item["rating"]
+        fingerprint = _review_fingerprint(text, rating)
 
-        if not backfill and review_id in seen_ids:
+        status = _classify_review(review_id, fingerprint, seen_dict)
+        updated_dict[review_id] = fingerprint
+
+        if not backfill and status in ("seen", "legacy"):
             continue
 
         date_obj = item["date_obj"]
@@ -119,27 +165,32 @@ def _get_ios_reviews_via_asc(
         formatted_date = (
             date_obj.strftime("%Y-%m-%d %H:%M:%S") if date_obj else ""
         )
-        text = item["content"] or ""
-        if item.get("title"):
-            text = f"{item['title']}\n{text}".strip()
+        is_edited = (status == "edited")
+        if is_edited:
+            edited_count += 1
 
         new_reviews.append({
             "platform": "iOS",
             "app_name": app_name,
             "user_name": item["user_name"],
-            "rating": item["rating"],
+            "rating": rating,
             "review_text": text,
             "date": formatted_date,
             "review_id": review_id,
+            "is_edited": is_edited,
         })
 
-    print(
+    msg = (
         f"[iOS/ASC] {app_name}：ASC 取得 {len(raw)} 則，"
         f"抓到 {len(new_reviews)} 則{'歷史' if backfill else '新'}評論"
-        + (f"（略過 {skipped_replied} 則已回復）" if skipped_replied else "")
     )
+    if edited_count:
+        msg += f"（含 {edited_count} 則編輯更新）"
+    if skipped_replied:
+        msg += f"（略過 {skipped_replied} 則已回復）"
+    print(msg)
 
-    _save_seen_ids(seen_ids_file, seen_ids | current_ids)
+    _save_seen_ids(seen_ids_file, updated_dict)
     return new_reviews
 
 
@@ -213,7 +264,7 @@ def _get_ios_reviews_via_rss(
 ) -> list[dict]:
     """iTunes RSS 降級抓取（ASC 未設定或失敗時使用）。"""
     seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_ios_seen_ids.json")
-    seen_ids, is_fresh = _load_seen_ids(seen_ids_file)
+    seen_dict, is_fresh = _load_seen_ids(seen_ids_file)
 
     if backfill:
         min_date = _backfill_since()
@@ -224,8 +275,9 @@ def _get_ios_reviews_via_rss(
         min_date = None
 
     new_reviews: list[dict] = []
-    current_ids: set[str] = set()
+    updated_dict: dict = dict(seen_dict)
     total_fetched = 0
+    edited_count = 0
 
     for page in range(1, _IOS_RSS_PAGE_LIMIT + 1):
         try:
@@ -242,7 +294,7 @@ def _get_ios_reviews_via_rss(
             entries = [entries]
 
         total_fetched += len(entries)
-        page_all_seen = True
+        page_all_skip = True
         stop_by_date = False
 
         for entry in entries:
@@ -250,11 +302,19 @@ def _get_ios_reviews_via_rss(
             if not parsed:
                 continue
             review_id = parsed["review_id"]
-            current_ids.add(review_id)
 
-            if not backfill and review_id in seen_ids:
+            text = parsed["content"] or ""
+            if parsed["title"]:
+                text = f"{parsed['title']}\n{text}".strip()
+            rating = parsed["rating"]
+            fingerprint = _review_fingerprint(text, rating)
+
+            status = _classify_review(review_id, fingerprint, seen_dict)
+            updated_dict[review_id] = fingerprint
+
+            if not backfill and status in ("seen", "legacy"):
                 continue
-            page_all_seen = False
+            page_all_skip = False
 
             date_obj = parsed["date_obj"]
             if min_date and date_obj and date_obj < min_date:
@@ -264,34 +324,40 @@ def _get_ios_reviews_via_rss(
             formatted_date = (
                 date_obj.strftime("%Y-%m-%d %H:%M:%S") if date_obj else ""
             )
-            text = parsed["content"] or ""
-            if parsed["title"]:
-                text = f"{parsed['title']}\n{text}".strip()
+            is_edited = (status == "edited")
+            if is_edited:
+                edited_count += 1
 
             new_reviews.append({
                 "platform": "iOS",
                 "app_name": app_name,
                 "user_name": parsed["user_name"],
-                "rating": parsed["rating"],
+                "rating": rating,
                 "review_text": text,
                 "date": formatted_date,
                 "review_id": review_id,
+                "is_edited": is_edited,
             })
 
-        if not backfill and page_all_seen and seen_ids:
+        if not backfill and page_all_skip and seen_dict:
             break
         if stop_by_date and not backfill:
             break
 
         time.sleep(0.3)
 
-    print(f"[iOS/RSS] {app_name}：RSS 取得 {total_fetched} 則，抓到 "
-          f"{len(new_reviews)} 則{'歷史' if backfill else '新'}評論")
+    msg = (
+        f"[iOS/RSS] {app_name}：RSS 取得 {total_fetched} 則，抓到 "
+        f"{len(new_reviews)} 則{'歷史' if backfill else '新'}評論"
+    )
+    if edited_count:
+        msg += f"（含 {edited_count} 則編輯更新）"
+    print(msg)
 
     if total_fetched == 0:
         print(f"[iOS/RSS] ⚠️ {app_name}：RSS 回傳 0 則評論，可能被 Apple 封鎖！")
 
-    _save_seen_ids(seen_ids_file, seen_ids | current_ids)
+    _save_seen_ids(seen_ids_file, updated_dict)
     return new_reviews
 
 
@@ -338,7 +404,7 @@ def get_android_reviews(
     print(f"[Android] 正在抓取 {app_name} 的評論（{'回溯模式' if backfill else '增量模式'}）...")
 
     seen_ids_file = os.path.join(config.DATA_DIR, f"{app_name}_android_seen_ids.json")
-    seen_ids, is_fresh = _load_seen_ids(seen_ids_file)
+    seen_dict, is_fresh = _load_seen_ids(seen_ids_file)
 
     if is_fresh and not backfill:
         min_date = datetime.now() - timedelta(days=2)
@@ -350,8 +416,9 @@ def get_android_reviews(
         max_pages = _ANDROID_MAX_PAGES
 
     new_reviews: list[dict] = []
-    current_ids: set[str] = set()
-    consecutive_seen = 0
+    updated_dict: dict = dict(seen_dict)
+    consecutive_skip = 0
+    edited_count = 0
     token = None
     total_fetched = 0
 
@@ -379,12 +446,17 @@ def get_android_reviews(
 
         for r in result:
             review_id = r["reviewId"]
-            current_ids.add(review_id)
+            content = r["content"] or ""
+            rating = r["score"]
+            fingerprint = _review_fingerprint(content, rating)
 
-            if not backfill and review_id in seen_ids:
-                consecutive_seen += 1
+            status = _classify_review(review_id, fingerprint, seen_dict)
+            updated_dict[review_id] = fingerprint
+
+            if not backfill and status in ("seen", "legacy"):
+                consecutive_skip += 1
                 continue
-            consecutive_seen = 0
+            consecutive_skip = 0
 
             review_date = r["at"]
             if review_date.tzinfo is not None:
@@ -393,17 +465,22 @@ def get_android_reviews(
                 stop_by_date = True
                 continue
 
+            is_edited = (status == "edited")
+            if is_edited:
+                edited_count += 1
+
             new_reviews.append({
                 "platform": "Android",
                 "app_name": app_name,
                 "user_name": r["userName"],
-                "rating": r["score"],
-                "review_text": r["content"],
+                "rating": rating,
+                "review_text": content,
                 "date": review_date.strftime("%Y-%m-%d %H:%M:%S"),
                 "review_id": review_id,
+                "is_edited": is_edited,
             })
 
-        if not backfill and consecutive_seen >= _ANDROID_STOP_AFTER_SEEN:
+        if not backfill and consecutive_skip >= _ANDROID_STOP_AFTER_SEEN:
             break
         if stop_by_date and not backfill:
             break
@@ -412,10 +489,15 @@ def get_android_reviews(
 
         time.sleep(0.3)
 
-    print(f"[Android] {app_name}：Play 取得 {total_fetched} 則，抓到 "
-          f"{len(new_reviews)} 則{'歷史' if backfill else '新'}評論")
+    msg = (
+        f"[Android] {app_name}：Play 取得 {total_fetched} 則，抓到 "
+        f"{len(new_reviews)} 則{'歷史' if backfill else '新'}評論"
+    )
+    if edited_count:
+        msg += f"（含 {edited_count} 則編輯更新）"
+    print(msg)
 
-    _save_seen_ids(seen_ids_file, seen_ids | current_ids)
+    _save_seen_ids(seen_ids_file, updated_dict)
     return new_reviews
 
 

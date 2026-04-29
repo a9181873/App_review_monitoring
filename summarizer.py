@@ -42,7 +42,8 @@ def generate_summary(reviews: list[dict], report_path: str) -> tuple[str, str]:
         summary += "## 詳細評論清單\n"
 
         for r in reviews:
-            summary += f"### [{r['platform']}] {r['app_name']} - {r['user_name']} ({r['rating']}星)\n"
+            edit_badge = "（已編輯）" if r.get("is_edited") else ""
+            summary += f"### [{r['platform']}] {r['app_name']} - {r['user_name']} ({r['rating']}星){edit_badge}\n"
             summary += f"- **日期**: {r['date']}\n"
             summary += f"- **分類**: {r.get('category', 'N/A')}\n"
             summary += f"- **情緒**: {r.get('sentiment', 'N/A')}\n"
