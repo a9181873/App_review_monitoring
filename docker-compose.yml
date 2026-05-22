@@ -1,0 +1,9 @@
+services:
+  app-review:
+    build: .
+    container_name: app-review-monitor
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+    restart: "no"
