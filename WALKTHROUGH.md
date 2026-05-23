@@ -1,6 +1,17 @@
 # Walkthrough: 系統優化紀錄
 
-## 最新變更摘要（v2 — AI 語意分析 + iOS 回覆偵測）
+## 最新變更摘要（v3 — ASC API 重試 + 文件補全）
+
+| 檔案 | 變更類型 | 說明 |
+|:---|:---:|:---|
+| [ios_asc.py](ios_asc.py) | ✏️ 更新 | `_request()` 加入指數退避重試（429/5xx/連線錯誤，3 次：2s → 4s → 8s），重試前強制刷新 JWT |
+| [ASC_SETUP_GUIDE.md](ASC_SETUP_GUIDE.md) | 🆕 新增 | ASC API 完整設定指南（費用、申請步驟、.env 設定、常見錯誤） |
+| [README.md](README.md) | ✏️ 更新 | 環境變數表新增 `ASC_PRIVATE_KEY_PATH` 並連結設定指南 |
+| [.env.example](.env.example) | ✏️ 更新 | 新增 `ASC_PRIVATE_KEY_PATH`、費用提示、指南連結 |
+
+---
+
+## v2 — AI 語意分析 + iOS 回覆偵測
 
 | 檔案 | 變更類型 | 說明 |
 |:---|:---:|:---|

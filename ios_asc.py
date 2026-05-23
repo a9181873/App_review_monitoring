@@ -35,6 +35,11 @@ _API_BASE = "https://api.appstoreconnect.apple.com"
 _JWT_TTL_SECONDS = 20 * 60  # ASC 上限
 _token_cache: dict = {"token": None, "exp": 0}
 
+# ── 重試設定 ──
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2  # 秒，指數退避：2 → 4 → 8
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+
 
 def is_configured() -> bool:
     """檢查 ASC API 所需金鑰是否齊全，且 PyJWT 可用。"""
@@ -81,19 +86,42 @@ def _get_jwt() -> str:
 
 
 def _request(url: str) -> dict:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {_get_jwt()}",
-            "Accept": "application/json",
-        },
+    """發送 ASC API 請求，含指數退避重試（429/5xx）。"""
+    last_err: Exception | None = None
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "Authorization": f"Bearer {_get_jwt()}",
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            if e.code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                print(f"[ASC] HTTP {e.code}，{delay}s 後重試（{attempt + 1}/{_MAX_RETRIES}）")
+                time.sleep(delay)
+                _token_cache["exp"] = 0  # 強制刷新 JWT 避免過期
+                last_err = e
+                continue
+            raise RuntimeError(f"ASC API HTTP {e.code}: {body}") from e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            if attempt < _MAX_RETRIES:
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                print(f"[ASC] 連線錯誤，{delay}s 後重試（{attempt + 1}/{_MAX_RETRIES}）：{e}")
+                time.sleep(delay)
+                last_err = e
+                continue
+            raise RuntimeError(f"ASC API 連線失敗（已重試 {_MAX_RETRIES} 次）：{e}") from e
+
+    raise RuntimeError(
+        f"ASC API 請求失敗（已重試 {_MAX_RETRIES} 次）：{last_err}"
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"ASC API HTTP {e.code}: {body}") from e
 
 
 def fetch_reviews(app_id: str, max_reviews: int = 200) -> list[dict]:

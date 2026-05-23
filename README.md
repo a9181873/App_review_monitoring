@@ -53,9 +53,10 @@ python main.py --weekly        # 週報
 |:---|:---|:---|
 | `OPENROUTER_API_KEY` | 選填 | OpenRouter API Key，AI 語意分析主力（免費方案） |
 | `GEMINI_API_KEY` | 選填 | Gemini API Key，備援 AI（免費方案） |
-| `ASC_KEY_ID` | 選填 | App Store Connect Key ID，iOS 即時評論 |
+| `ASC_KEY_ID` | 選填 | App Store Connect Key ID，iOS 即時評論（[設定指南](ASC_SETUP_GUIDE.md)） |
 | `ASC_ISSUER_ID` | 選填 | App Store Connect Issuer ID |
 | `ASC_PRIVATE_KEY` | 選填 | .p8 私鑰內容（雲端用） |
+| `ASC_PRIVATE_KEY_PATH` | 選填 | .p8 私鑰檔案路徑（本機用） |
 | `EMAIL_SENDER` / `EMAIL_PASSWORD` | 選填 | Gmail SMTP 通知 |
 | `TEAMS_WEBHOOK_URL` | 選填 | Teams 頻道通知 |
 
